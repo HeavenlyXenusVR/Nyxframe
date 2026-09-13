@@ -95,6 +95,33 @@ actor ImageCache {
         }
     }
 
+    /// Warms the cache for thumbnails about to scroll into view -- mirrors
+    /// web's idle-scheduled `preloadMediaAssets` (`utils/media.js`), called
+    /// right after a page of feed/discover results lands so the next
+    /// screenful is already cached (or in flight) by the time the user
+    /// actually scrolls to it, instead of every card starting its fetch
+    /// only once it's on screen. `nonisolated` and fire-and-forget (no
+    /// `await` needed at the call site, callable straight from a
+    /// `@MainActor` view model) since it only ever calls back into
+    /// `loadImage`, which already does its own cache-check and
+    /// in-flight-coalescing correctly -- there's nothing here that needs
+    /// this actor's own isolation. Capped concurrency so background
+    /// prefetching never meaningfully competes with an in-viewport load.
+    nonisolated func preload(urls: [URL]) {
+        guard !urls.isEmpty else { return }
+        Task.detached(priority: .utility) {
+            await withTaskGroup(of: Void.self) { group in
+                var iterator = urls.makeIterator()
+                func launchNext() {
+                    guard let url = iterator.next() else { return }
+                    group.addTask { _ = try? await ImageCache.shared.loadImage(for: url) }
+                }
+                for _ in 0..<min(3, urls.count) { launchNext() }
+                for await _ in group { launchNext() }
+            }
+        }
+    }
+
     private func pruneDiskCacheIfNeeded() {
         guard let entries = try? FileManager.default.contentsOfDirectory(at: diskDirectory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
         guard entries.count > Self.maxDiskEntries else { return }

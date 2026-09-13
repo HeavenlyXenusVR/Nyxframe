@@ -37,6 +37,7 @@ final class FeedViewModel: ObservableObject {
             items = fetched
             offset = fetched.count
             reachedEnd = fetched.count < pageSize
+            preloadThumbnails(for: fetched)
         } catch {
             guard requestGeneration == generation else { return }
             if !error.isCancellation { errorMessage = error.localizedDescription }
@@ -56,8 +57,20 @@ final class FeedViewModel: ObservableObject {
             items.append(contentsOf: next)
             offset += next.count
             reachedEnd = next.count < pageSize
+            preloadThumbnails(for: next)
         } catch {
             // Non-fatal — keep whatever's already loaded on screen.
         }
+    }
+
+    /// Warms `ImageCache` for the first few thumbnails of a just-fetched
+    /// page -- mirrors web's `preloadMediaAssets({limit: 6})` call after
+    /// every list response (`DiscoverPage.jsx`/`FeedPage.jsx`). Only
+    /// meaningfully useful for a page appended via `loadMoreIfNeeded`
+    /// (page 1's items are about to render immediately anyway), but called
+    /// uniformly for both same as web does.
+    private func preloadThumbnails(for page: [MediaItem]) {
+        let urls = page.prefix(6).compactMap { $0.thumbUrl.flatMap(URL.init(string:)) }
+        ImageCache.shared.preload(urls: urls)
     }
 }
