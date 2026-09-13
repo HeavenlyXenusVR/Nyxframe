@@ -344,7 +344,7 @@ extension GalleryAPIClient {
     /// background job and returns immediately. `jobId` is nil only if the
     /// backend contract ever changes underneath this.
     private struct UploadFinishAck: Decodable { var status: String; var jobId: String? }
-    private struct UploadJobStatusResponse: Decodable {
+    struct UploadJobStatusResponse: Decodable {
         var status: String
         var media: MediaItem?
         var possibleDuplicates: [DuplicateMatch]?
@@ -352,23 +352,34 @@ extension GalleryAPIClient {
         var detail: String?
     }
 
-    /// Polls `GET /api/media/upload/job/:job_id` (`M.upload_job_status` in
-    /// routes.lua) until the background finish job lands on "done"/"error".
-    /// Web's equivalent (`Shell.jsx`) polls this from a global, localStorage-
-    /// backed queue every 6s so the uploader can navigate away immediately;
-    /// this app instead awaits it right here, on the same screen the upload
-    /// was started from, since there's no persisted background-job UI yet.
-    /// The typical case resolves on the very first check -- the comment on
-    /// `upload_chunk_finish` server-side notes a real response "normally
-    /// comes back in well under a second" -- so this checks immediately and
-    /// only sleeps between subsequent polls. Bounded to 6 minutes (jobs
-    /// themselves live 24h server-side, but this call is still on-screen
-    /// waiting, not fire-and-forget) so a stuck job doesn't spin the upload
-    /// UI forever.
+    /// One-shot check of `GET /api/media/upload/job/:job_id` (`M.upload_job_status`
+    /// in routes.lua) -- not private, unlike the rest of this upload-finish
+    /// machinery, since `UploadRecoveryService` also calls this directly to
+    /// poll on its own cadence (app-foreground events) rather than the tight
+    /// loop `pollUploadJob` below runs.
+    func uploadJobStatus(jobId: String) async throws -> UploadJobStatusResponse {
+        try await requestJSON("/api/media/upload/job/\(jobId)")
+    }
+
+    /// Polls `uploadJobStatus` until the background finish job lands on
+    /// "done"/"error". Web's equivalent (`Shell.jsx`) polls this from a
+    /// global, localStorage-backed queue every 6s so the uploader can
+    /// navigate away immediately; this app instead awaits it right here, on
+    /// the same screen the upload was started from -- `PendingUploadJobStore`
+    /// (written by the caller below) is the safety net for the one case this
+    /// doesn't cover on its own: the app being killed outright while this
+    /// loop is running, which `UploadRecoveryService` picks up on next
+    /// launch/foreground. The typical case resolves on the very first check
+    /// -- the comment on `upload_chunk_finish` server-side notes a real
+    /// response "normally comes back in well under a second" -- so this
+    /// checks immediately and only sleeps between subsequent polls. Bounded
+    /// to 6 minutes (jobs themselves live 24h server-side, but this call is
+    /// still on-screen waiting, not fire-and-forget) so a stuck job doesn't
+    /// spin the upload UI forever.
     private func pollUploadJob(jobId: String) async throws -> MediaUploadResponse {
         let deadline = Date().addingTimeInterval(360)
         while true {
-            let job: UploadJobStatusResponse = try await requestJSON("/api/media/upload/job/\(jobId)")
+            let job = try await uploadJobStatus(jobId: jobId)
             switch job.status {
             case "done":
                 guard let media = job.media else {
@@ -425,6 +436,14 @@ extension GalleryAPIClient {
         guard let jobId = finishAck.jobId else {
             throw GalleryAPIError.http(status: 0, message: "Unexpected response finishing upload.")
         }
+        // Written BEFORE polling starts and removed only once pollUploadJob
+        // actually returns/throws below -- if the app gets killed outright
+        // while that loop is running, this entry is left behind on disk for
+        // UploadRecoveryService to pick up and resolve on next launch/
+        // foreground, instead of the upload's outcome being lost from the
+        // client's perspective even though it already saved server-side.
+        PendingUploadJobStore.add(jobId: jobId, filename: fileName)
+        defer { PendingUploadJobStore.remove(jobId: jobId) }
         return try await pollUploadJob(jobId: jobId)
     }
 

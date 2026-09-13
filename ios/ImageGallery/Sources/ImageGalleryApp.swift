@@ -7,6 +7,7 @@ struct ImageGalleryApp: App {
     @StateObject private var biometricLock = BiometricLockService()
     @StateObject private var quickActionRouter = QuickActionRouter.shared
     @StateObject private var unreadCounts = UnreadCountsService()
+    @StateObject private var uploadRecovery = UploadRecoveryService()
 
     var body: some Scene {
         WindowGroup {
@@ -15,6 +16,7 @@ struct ImageGalleryApp: App {
                 .environmentObject(biometricLock)
                 .environmentObject(quickActionRouter)
                 .environmentObject(unreadCounts)
+                .environmentObject(uploadRecovery)
         }
     }
 }
@@ -25,6 +27,7 @@ struct RootView: View {
     @EnvironmentObject private var session: SessionStore
     @EnvironmentObject private var biometricLock: BiometricLockService
     @EnvironmentObject private var unreadCounts: UnreadCountsService
+    @EnvironmentObject private var uploadRecovery: UploadRecoveryService
     @AppStorage("theme_mode") private var themeMode = "system"
     @Environment(\.scenePhase) private var scenePhase
 
@@ -71,6 +74,7 @@ struct RootView: View {
             updatePolling()
             await ServerConfig.shared.refresh()
             BackgroundMusicService.shared.startIfNeeded()
+            await uploadRecovery.checkPendingJobs()
         }
         .onChange(of: session.currentUser?.id) { _ in
             updatePolling()
@@ -81,10 +85,22 @@ struct RootView: View {
                     await session.refreshCurrentUser()
                     await biometricLock.attemptUnlock()
                     await unreadCounts.refresh()
+                    await uploadRecovery.checkPendingJobs()
                 }
             } else if newPhase == .background {
                 biometricLock.lock()
             }
+        }
+        .alert(
+            "Upload update",
+            isPresented: Binding(
+                get: { uploadRecovery.recoveredMessage != nil },
+                set: { isPresented in if !isPresented { uploadRecovery.recoveredMessage = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(uploadRecovery.recoveredMessage ?? "")
         }
     }
 
