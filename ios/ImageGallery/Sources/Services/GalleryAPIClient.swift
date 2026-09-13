@@ -187,6 +187,35 @@ final class GalleryAPIClient {
         }
     }
 
+    /// GET, but through `APIResponseCache` -- opt-in per call site (see
+    /// `listMedia`/`trendingMedia`/`myMedia`) rather than the default,
+    /// unlike web's blanket-ish `cachedApiFetch` usage across list screens.
+    /// Kept opt-in here since a mistakenly-cached mutation-adjacent read
+    /// (comments, a single media detail someone might edit in place) would
+    /// be a much more visible bug than a feed list being briefly stale, and
+    /// there's no compiler in this environment to catch a wrong call site
+    /// choosing the cached path by accident if it were the default.
+    @discardableResult
+    func requestJSONCached<T: Decodable>(_ path: String, query: [String: String]? = nil, ttl: TimeInterval, requiresAuth: Bool = true) async throws -> T {
+        let querySignature = (query ?? [:]).sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: "&")
+        let cacheKey = "\(path)?\(querySignature)|\(isAuthenticated ? "auth" : "anon")"
+        let data = try await APIResponseCache.shared.data(for: cacheKey, ttl: ttl) {
+            let (data, response) = try await self.withRequestTimeout {
+                try await self.sendWithRetry(
+                    buildRequest: { try self.baseRequest(path: path, method: "GET", query: query, requiresAuth: requiresAuth) },
+                    perform: { try await self.session.data(for: $0) }
+                )
+            }
+            try self.validate(response, data: data)
+            return data
+        }
+        do {
+            return try decoder.decode(T.self, from: data)
+        } catch {
+            throw GalleryAPIError.decoding(String(describing: error))
+        }
+    }
+
     // MARK: JSON-body requests
 
     @discardableResult

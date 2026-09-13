@@ -205,6 +205,10 @@ final class UploadViewModel: ObservableObject {
             }
             uploadedMedia = response.media
             possibleDuplicates = response.possibleDuplicates ?? []
+            // myMedia() is now cached (see GalleryAPIClient+Endpoints.swift) --
+            // without this, "my uploads"/Studio could sit missing this post
+            // for up to that cache's TTL right after a successful upload.
+            await APIResponseCache.shared.invalidate(pathPrefix: "/api/me/media")
             Haptics.success()
             return true
         } catch {

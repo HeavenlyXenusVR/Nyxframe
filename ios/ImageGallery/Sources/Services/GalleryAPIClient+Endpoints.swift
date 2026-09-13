@@ -177,7 +177,14 @@ extension GalleryAPIClient {
         if let subcategoryId { params["subcategory_id"] = String(subcategoryId) }
         if let query, !query.isEmpty { params["q"] = query }
         if let adult { params["adult"] = adult }
-        let response: MediaListResponse = try await requestJSON("/api/media", query: params, requiresAuth: false)
+        // Cached (30s, matching web's API_CACHE_TTL default in api.js) --
+        // this is the main feed/discover list, re-fetched on every screen
+        // appearance with no cache before this; scrolling away from and
+        // straight back to the same filter/page previously always meant a
+        // fresh round trip. requiresAuth stays false (an optional-auth
+        // endpoint), but the cache key still separates authed/anon
+        // responses since this same call is used both signed-in and out.
+        let response: MediaListResponse = try await requestJSONCached("/api/media", query: params, ttl: 30, requiresAuth: false)
         return response.media
     }
 
@@ -186,7 +193,7 @@ extension GalleryAPIClient {
     }
 
     func trendingMedia(days: Int = 7, limit: Int = 30) async throws -> [MediaItem] {
-        let response: MediaListResponse = try await requestJSON("/api/media/trending", query: ["days": String(days), "limit": String(limit)], requiresAuth: false)
+        let response: MediaListResponse = try await requestJSONCached("/api/media/trending", query: ["days": String(days), "limit": String(limit)], ttl: 30, requiresAuth: false)
         return response.media
     }
 
@@ -421,8 +428,14 @@ extension GalleryAPIClient {
         return try await pollUploadJob(jobId: jobId)
     }
 
+    /// Cached briefly (15s -- shorter than the general 30s list TTL since
+    /// this backs "my uploads"/Studio, where a user acting on their own
+    /// content expects to see the effect sooner) and explicitly invalidated
+    /// right after a successful upload in `UploadViewModel.submit()` so a
+    /// just-finished upload doesn't sit missing from this list for the rest
+    /// of the TTL window.
     func myMedia(includeDeleted: Bool = true) async throws -> [MediaItem] {
-        let response: MediaListResponse = try await requestJSON("/api/me/media", query: ["include_deleted": String(includeDeleted)])
+        let response: MediaListResponse = try await requestJSONCached("/api/me/media", query: ["include_deleted": String(includeDeleted)], ttl: 15)
         return response.media
     }
 
@@ -466,17 +479,33 @@ extension GalleryAPIClient {
         var pinned: Bool
     }
 
+    /// Invalidates the cached list endpoints (`listMedia`/`myMedia` via
+    /// `requestJSONCached`) after a mutation that could change what they'd
+    /// return -- their TTLs are short (15-30s) so this is a "make it feel
+    /// instant" nicety, not a correctness requirement, but a self-edit
+    /// disappearing/reappearing for up to 30s after being made is exactly
+    /// the kind of jank a cache added for scroll-back convenience shouldn't
+    /// introduce for the one person editing their own content in the first
+    /// place.
+    private func invalidateMediaListCaches() async {
+        await APIResponseCache.shared.invalidate(pathPrefix: "/api/media")
+        await APIResponseCache.shared.invalidate(pathPrefix: "/api/me/media")
+    }
+
     func updateMedia(mediaId: Int, body: UpdateMediaBody) async throws -> MediaItem {
         let response: MediaResponse = try await requestJSON("/api/media/\(mediaId)", method: "PATCH", body: body)
+        await invalidateMediaListCaches()
         return response.media
     }
 
     func deleteMedia(id: Int) async throws {
         try await requestVoid("/api/media/\(id)", method: "DELETE")
+        await invalidateMediaListCaches()
     }
 
     func restoreMedia(id: Int) async throws -> MediaItem {
         let response: MediaResponse = try await requestJSON("/api/media/\(id)/restore", body: EmptyBody())
+        await invalidateMediaListCaches()
         return response.media
     }
 
