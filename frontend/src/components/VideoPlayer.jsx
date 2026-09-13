@@ -118,17 +118,39 @@ export function VideoPlayer({ src, poster, quality, onQualityChange, qualityOpti
     // BackgroundMusicPlayer listens for this globally to duck/restore its
     // own volume -- see its VIDEO_PLAYING_EVENT doc comment for why this is
     // a plain window event rather than threaded through context/props.
+    //
+    // "Audible", not just "playing": every video on this site autoplays
+    // MUTED the moment its page opens (see the src-change effect below,
+    // `shouldAutoPlayRef`/`video.muted = true` -- browsers block unmuted
+    // autoplay everywhere, so this is the only way a video ever starts on
+    // its own). Dispatching purely off play/pause meant BackgroundMusicPlayer
+    // ducked down to near-silence the INSTANT any video page loaded, even
+    // though the muted video wasn't making any sound yet -- so there was
+    // never a perceptible fade-out tied to audio actually starting, and the
+    // music sat ducked for as long as a viewer stayed on any video page
+    // (reported live as "background music isn't constantly playing" and
+    // "doesn't fade out/in"). Worse, unmuting an already-playing video (the
+    // normal "tap for sound" flow) only fires `volumechange`, which never
+    // touched this event at all -- so ducking never even started when sound
+    // actually began, and never reversed when the viewer muted back.
+    // `dispatchAudibleState` is the single source of truth now, called from
+    // every event that can change either half of "is this video making
+    // sound": play/pause/ended AND volumechange.
+    const dispatchAudibleState = () => {
+      const audible = !video.paused && !video.muted;
+      window.dispatchEvent(new CustomEvent("nyxframe:video-playing", { detail: { playing: audible } }));
+    };
     const onPlay = () => {
       setPlaying(true);
       setBuffering(false);
       scheduleHide();
-      window.dispatchEvent(new CustomEvent("nyxframe:video-playing", { detail: { playing: true } }));
+      dispatchAudibleState();
     };
     const onPause = () => {
       setPlaying(false);
       setShowControls(true);
       if (controlsHideTimer.current) clearTimeout(controlsHideTimer.current);
-      window.dispatchEvent(new CustomEvent("nyxframe:video-playing", { detail: { playing: false } }));
+      dispatchAudibleState();
     };
     const onTimeUpdate = () => {
       setCurrentTime(video.currentTime);
@@ -223,9 +245,13 @@ export function VideoPlayer({ src, poster, quality, onQualityChange, qualityOpti
     const onEnded = () => {
       setPlaying(false);
       setShowControls(true);
-      window.dispatchEvent(new CustomEvent("nyxframe:video-playing", { detail: { playing: false } }));
+      dispatchAudibleState();
     };
-    const onVolumeChange = () => { setVolume(video.volume); setMuted(video.muted); };
+    // The "tap for sound" unmute (and re-muting mid-playback) only ever
+    // fires this event, never play/pause -- without it here, ducking would
+    // never actually start when a viewer's video began making real sound,
+    // and never reverse when they muted it again.
+    const onVolumeChange = () => { setVolume(video.volume); setMuted(video.muted); dispatchAudibleState(); };
     const onFullscreenChange = () => setFullscreen(Boolean(document.fullscreenElement));
     const onPipEnter = () => setPip(true);
     const onPipLeave = () => setPip(false);
@@ -259,12 +285,15 @@ export function VideoPlayer({ src, poster, quality, onQualityChange, qualityOpti
       clearTimeout(controlsHideTimer.current);
       if (bufferingTimerRef.current) clearTimeout(bufferingTimerRef.current);
       // Navigating away mid-playback unmounts this without ever firing
-      // "pause"/"ended" -- without this, BackgroundMusicPlayer would stay
-      // ducked forever, permanently quiet, since it never sees the
-      // matching "false" event.
-      if (!video.paused) {
-        window.dispatchEvent(new CustomEvent("nyxframe:video-playing", { detail: { playing: false } }));
-      }
+      // "pause"/"ended" -- without this, BackgroundMusicPlayer could stay
+      // ducked forever, permanently quiet, since it never sees a matching
+      // "false" event. Unconditional now (was gated on `!video.paused`,
+      // which missed the actually-common case: a still-playing but MUTED
+      // video was never audible in the first place, so there was nothing
+      // to un-duck, but sending "false" anyway is a harmless idempotent
+      // no-op and removes any chance of this being the one path that
+      // still gets the old play-vs-audible distinction wrong).
+      window.dispatchEvent(new CustomEvent("nyxframe:video-playing", { detail: { playing: false } }));
     };
   }, [scheduleHide]);
 
