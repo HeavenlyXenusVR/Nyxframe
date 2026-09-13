@@ -253,7 +253,10 @@ struct SettingsView: View {
                 Toggle("Show joined date", isOn: $profileShowJoinedDate)
             }
 
-            Section("Watermark", footer: Text("Disabled site-wide -- no longer applied to uploads.")) {
+            Section("Watermark") {
+                Text("Disabled site-wide -- no longer applied to uploads.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 TextField("Disabled", text: $watermarkText)
                     .disabled(true)
                 Button {
