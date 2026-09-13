@@ -137,6 +137,20 @@ export function UploadPage({ ctx }) {
 
   async function analyze() {
     if (!form.file) return;
+    // Analyze always sends the file as one plain multipart request (unlike
+    // the real upload below, which switches to the chunked path above this
+    // same threshold) -- a large enough picked file makes that single
+    // request itself exceed this deployment's Cloudflare edge body-size cap
+    // and 413s with a raw Cloudflare HTML error page, not a real API error
+    // (reported live from a large wallpaper image). Analyze is a pure
+    // convenience preview -- auto_ai already runs the same analysis
+    // server-side during the real upload regardless -- so it's fine to just
+    // decline up front here rather than build a second chunking path for a
+    // pre-submit preview feature.
+    if (form.file.size > EDGE_SAFE_UPLOAD_BYTES) {
+      ctx.showToast("This file is too large to analyze here — go ahead and upload it directly; AI metadata still runs automatically.", "info");
+      return;
+    }
     setBusy(true);
     setAnalyzing(true);
     try {
@@ -382,7 +396,12 @@ export function UploadPage({ ctx }) {
             </div>
           </div>
           <div className="form-actions">
-            <button type="button" onClick={analyze} disabled={busy || !form.file}><WandSparkles size={16} />{analyzing ? "Analyzing…" : "Analyze"}</button>
+            <button
+              type="button"
+              onClick={analyze}
+              disabled={busy || !form.file || form.file.size > EDGE_SAFE_UPLOAD_BYTES}
+              title={form.file && form.file.size > EDGE_SAFE_UPLOAD_BYTES ? "Too large to analyze here — upload directly instead; AI metadata still runs automatically." : undefined}
+            ><WandSparkles size={16} />{analyzing ? "Analyzing…" : "Analyze"}</button>
             <button className="primary" type="submit" disabled={busy || !form.file}><Upload size={16} />{busy ? "Working" : "Upload"}</button>
           </div>
         </section>

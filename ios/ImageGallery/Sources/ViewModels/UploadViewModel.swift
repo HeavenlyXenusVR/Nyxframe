@@ -70,6 +70,17 @@ final class UploadViewModel: ObservableObject {
     /// memory, so raising this doesn't cost RAM.
     private var maxClientUploadBytes: Int { ServerConfig.shared.maxUploadBytes }
 
+    /// This deployment's Cloudflare tunnel hard-413s any single request body
+    /// over ~100MB regardless of the server's own configured upload limit
+    /// (see `GalleryAPIClient+Endpoints.swift`'s `uploadMediaChunked` doc
+    /// comment -- confirmed live). Comfortably under that. Videos already
+    /// routed through the chunked path above this threshold in `submit()`;
+    /// picked IMAGE `Data` never did (always a single one-shot request
+    /// regardless of size), so a large enough picked image 413'd both on
+    /// `analyze()` and on the real publish -- reported live from a large
+    /// wallpaper image that failed to even analyze.
+    private static let chunkedUploadThresholdBytes = 60 * 1024 * 1024
+
     func loadCategories() async {
         categories = (try? await api.categories()) ?? []
     }
@@ -126,6 +137,24 @@ final class UploadViewModel: ObservableObject {
     func analyze() async {
         guard pickedData != nil || pickedFileURL != nil else {
             errorMessage = "Choose a photo or video first."
+            return
+        }
+        // Unlike submit() above, GalleryAPIClient.analyzeMedia always sends
+        // one plain multipart request -- /api/media/analyze (routes.lua) is
+        // a standalone "preview before uploading" endpoint with no chunked-
+        // session counterpart to route through instead. Decline up front
+        // rather than let a large file 413 with a raw Cloudflare error page:
+        // this is a pure convenience preview, and auto_ai already runs the
+        // same analysis server-side during the real (chunked-capable)
+        // upload regardless, so nothing is lost by skipping it here.
+        var pickedSize: Int?
+        if let pickedData {
+            pickedSize = pickedData.count
+        } else if let pickedFileURL {
+            pickedSize = (try? FileManager.default.attributesOfItem(atPath: pickedFileURL.path)[.size] as? Int) ?? nil
+        }
+        if let pickedSize, pickedSize > Self.chunkedUploadThresholdBytes {
+            errorMessage = "This file is too large to analyze here — go ahead and upload it directly; AI metadata still runs automatically."
             return
         }
         isAnalyzing = true
@@ -188,10 +217,7 @@ final class UploadViewModel: ObservableObject {
             let response: MediaUploadResponse
             if let pickedFileURL {
                 let size = (try? FileManager.default.attributesOfItem(atPath: pickedFileURL.path)[.size] as? Int) ?? nil
-                // Comfortably under the ~100MB Cloudflare edge limit the
-                // direct single-request path silently dies above (see
-                // GalleryAPIClient+Endpoints.swift's uploadMediaChunked).
-                if let size, size > 60 * 1024 * 1024 {
+                if let size, size > Self.chunkedUploadThresholdBytes {
                     response = try await api.uploadMediaChunked(fileURL: pickedFileURL, fileName: pickedFileName, fields: fields) { [weak self] progress in
                         Task { @MainActor in self?.uploadProgress = progress }
                     }
@@ -199,7 +225,23 @@ final class UploadViewModel: ObservableObject {
                     response = try await api.uploadMedia(fileURL: pickedFileURL, fileName: pickedFileName, mimeType: pickedMimeType, fields: fields)
                 }
             } else if let pickedData {
-                response = try await api.uploadMedia(data: pickedData, fileName: pickedFileName, mimeType: pickedMimeType, fields: fields)
+                if pickedData.count > Self.chunkedUploadThresholdBytes {
+                    // Picked images were never given the chunked treatment
+                    // videos get above -- always a single multipart request
+                    // regardless of size, which 413'd for a large enough
+                    // image. uploadMediaChunked only takes a file URL (it
+                    // streams from disk), so stage the in-memory Data to a
+                    // temp file and reuse it exactly as the video path does.
+                    let tempURL = FileManager.default.temporaryDirectory
+                        .appendingPathComponent("upload-\(UUID().uuidString)-\(pickedFileName)")
+                    try pickedData.write(to: tempURL)
+                    defer { try? FileManager.default.removeItem(at: tempURL) }
+                    response = try await api.uploadMediaChunked(fileURL: tempURL, fileName: pickedFileName, fields: fields) { [weak self] progress in
+                        Task { @MainActor in self?.uploadProgress = progress }
+                    }
+                } else {
+                    response = try await api.uploadMedia(data: pickedData, fileName: pickedFileName, mimeType: pickedMimeType, fields: fields)
+                }
             } else {
                 return false
             }
