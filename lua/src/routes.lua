@@ -8982,7 +8982,26 @@ local function hls_check_access(req, media_id)
     return nil, 403, { detail = "Age verification required for this 18+ post." }
   end
   if item.media_kind ~= "video" then return nil, 404, { detail = "Not a video." } end
-  return item
+
+  -- 4th return: whether THIS request's success is safe to hand to a
+  -- SHARED/public cache (a CDN, a corporate proxy, anything that isn't
+  -- this one requester's own browser) that would replay the identical
+  -- cached response to any later requester of the same URL, auth or not.
+  -- That's only true when nothing about WHO is asking affected the outcome
+  -- above: visibility isn't private (private posts can succeed purely via
+  -- session/owner identity, `private_file_allowed`'s `owner` branch, which
+  -- never appears in the URL), and for an adult post specifically, THIS
+  -- request's own access token -- not session-based age verification via
+  -- `viewer_adult_allowed`, which is exactly as session-bound as the owner
+  -- check above -- is what let it through. Get this wrong in the permissive
+  -- direction and a shared cache could serve one logged-in viewer's
+  -- successful private/adult response to a later unauthorized requester of
+  -- the identical URL; wrong in the conservative direction just forgoes a
+  -- caching opportunity, so callers should treat this as default-false.
+  local access = req.query.access
+  local valid_access_token = access ~= nil and access ~= "" and access == gauth.media_access_token(M.settings.session_secret, media_id)
+  local publicly_cacheable = item.visibility ~= "private" and (not item.is_adult or valid_access_token)
+  return item, nil, nil, publicly_cacheable
 end
 
 local HLS_BANDWIDTH_BY_QUALITY = { ["1080p"] = 5000000, ["720p"] = 2800000, ["480p"] = 1400000, ["144p"] = 300000 }
@@ -8990,7 +9009,7 @@ local HLS_BANDWIDTH_BY_QUALITY = { ["1080p"] = 5000000, ["720p"] = 2800000, ["48
 function M.serve_hls_master(req)
   local media_id = tonumber(req.params.media_id)
   if not media_id then return 404, { detail = "Media not found." } end
-  local item, status, body = hls_check_access(req, media_id)
+  local item, status, body, publicly_cacheable = hls_check_access(req, media_id)
   if not item then return status, body end
 
   local access_qs = hls_propagated_qs(req) or ""
@@ -9004,8 +9023,13 @@ function M.serve_hls_master(req)
     lines[#lines + 1] = string.format('#EXT-X-STREAM-INF:BANDWIDTH=%d,NAME="%s"', HLS_BANDWIDTH_BY_QUALITY[quality], quality)
     lines[#lines + 1] = string.format("/api/media/%d/hls/%s/playlist.m3u8%s", media_id, quality, access_qs)
   end
-  return 200, table.concat(lines, "\n") .. "\n",
-    { ["Content-Type"] = "application/vnd.apple.mpegurl", ["Cache-Control"] = "no-cache" }
+  -- This list of quality URLs is the same for a given media_id regardless
+  -- of encode progress, so (unlike the per-quality playlist below) there's
+  -- no readiness check to gate on -- only the access-safety one.
+  return 200, table.concat(lines, "\n") .. "\n", {
+    ["Content-Type"] = "application/vnd.apple.mpegurl",
+    ["Cache-Control"] = publicly_cacheable and "public, max-age=31536000, immutable" or "no-cache",
+  }
 end
 
 -- Touched on every real playlist/segment request for a variant -- both
@@ -9029,7 +9053,7 @@ function M.serve_hls_playlist(req)
   local media_id = tonumber(req.params.media_id)
   local quality = normalize_video_quality(req.params.quality)
   if not media_id then return 404, { detail = "Media not found." } end
-  local item, status, body = hls_check_access(req, media_id)
+  local item, status, body, publicly_cacheable = hls_check_access(req, media_id)
   if not item then return status, body end
 
   -- source_path (2026-09-01): the same hardlink fast path the media warmer
@@ -9207,7 +9231,20 @@ function M.serve_hls_playlist(req)
           local safe_access_qs = access_qs:gsub("%%", "%%%%")
           text = text:gsub("(seg_%d+%.ts)", "%1" .. safe_access_qs)
         end
-        return 200, text, { ["Content-Type"] = "application/vnd.apple.mpegurl", ["Cache-Control"] = "no-cache" }
+        -- Long, public, immutable caching only once BOTH hold: the variant
+        -- is fully finished (hls_variant_ready -- while still encoding, this
+        -- exact response will have fewer segments next request, so it must
+        -- never be treated as immutable) AND this response is safe for a
+        -- SHARED cache per hls_check_access's 4th return (see its own doc
+        -- comment -- private posts, and adult posts reached via session
+        -- rather than an access token, must never be marked `public`, since
+        -- a shared cache would then be able to replay this exact response
+        -- to a later unauthorized requester of the identical URL). Otherwise
+        -- unchanged from before: `no-cache` so a still-growing or
+        -- access-controlled playlist is always revalidated at the origin.
+        local cache_control = (publicly_cacheable and hls_variant_ready(dir))
+          and "public, max-age=31536000, immutable" or "no-cache"
+        return 200, text, { ["Content-Type"] = "application/vnd.apple.mpegurl", ["Cache-Control"] = cache_control }
       end
     end
     local copas_ok, copas = pcall(require, "copas")
@@ -9242,7 +9279,7 @@ function M.serve_hls_segment(req)
   if not media_id or not segment or not segment:match("^seg_%d+%.ts$") then
     return 404, { detail = "Not found." }
   end
-  local item, status, body = hls_check_access(req, media_id)
+  local item, status, body, publicly_cacheable = hls_check_access(req, media_id)
   if not item then return status, body end
 
   local seg_watermark_text = nil -- WATERMARKS_ENABLED = false (get_user lookup for it removed too)
@@ -9282,7 +9319,20 @@ function M.serve_hls_segment(req)
   f:close()
   local bytes = table.concat(parts)
   M._touch_hls_heartbeat(dir)
-  return 200, bytes, { ["Content-Type"] = "video/mp2t", ["Cache-Control"] = "public, max-age=86400" }
+  -- PRE-EXISTING GAP FIXED HERE (2026-09-13): this was unconditionally
+  -- `public, max-age=86400` regardless of how access was granted -- see
+  -- hls_check_access's 4th return value doc comment for exactly why that's
+  -- unsafe for a private post, or an adult post reached via session-based
+  -- age verification rather than this request's own access token: a shared
+  -- cache honoring `public` could replay either straight to a later
+  -- unauthorized requester of the identical segment URL. `private` (not
+  -- `no-store`) in the unsafe case: an individual segment's bytes never
+  -- change once written regardless of visibility, so the requester's OWN
+  -- browser caching it for normal seek/replay within their own viewing
+  -- session is still both safe and worth keeping -- only a SHARED cache
+  -- must not store it.
+  local cache_scope = publicly_cacheable and "public" or "private"
+  return 200, bytes, { ["Content-Type"] = "video/mp2t", ["Cache-Control"] = cache_scope .. ", max-age=86400" }
 end
 
 -- Adds real HTTP Range/206 support. Previously flagged as a KNOWN
