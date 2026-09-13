@@ -7615,9 +7615,14 @@ local function ensure_video_quality_cache(media_id, item, content, quality)
     -- identical branch); crf reused as global_quality.
     local vaapi_profile = profile.profile == "baseline" and "constrained_baseline" or profile.profile
     local pre_input_args = string.format("-vaapi_device %s ", shell_quote(vaapi_device()))
+    -- -profile:v, not bare -profile -- see ensure_hls_variant's identical
+    -- fix; ffmpeg warns bare -profile is ambiguous between the video and
+    -- audio streams once both -c:v and -c:a are specified. No
+    -- force_key_frames here: this produces a plain .mp4 (no HLS
+    -- segmenting), so there's no segment-boundary alignment to fix.
     local codec_args = string.format(
       "-vf %s,format=nv12,hwupload -c:v h264_vaapi -rc_mode QVBR -global_quality %d -b:v %d -maxrate %d "
-        .. "-profile %s -level 4.1 -c:a aac -b:a %s",
+        .. "-profile:v %s -level 4.1 -c:a aac -b:a %s",
       shell_quote(scale_filter), profile.crf, profile.vaapi_ceiling_bps, profile.vaapi_ceiling_bps,
       vaapi_profile, profile.audio_bitrate
     )
@@ -8129,9 +8134,28 @@ local function ensure_hls_variant(media_id, item, content_fn, quality, opts)
       pre_input_args = string.format(
         "-hwaccel vaapi -hwaccel_output_format vaapi -vaapi_device %s ", shell_quote(vaapi_device())
       )
+      -- force_key_frames: without an explicit keyframe interval, the HLS
+      -- muxer can only cut a new segment at whatever keyframe the encoder
+      -- happens to produce at/after hls_time -- fine for constant-frame-rate
+      -- source but confirmed live to produce badly uneven segments (an
+      -- alternating 8s/4s pattern against a 6s HLS_SEGMENT_SECONDS target)
+      -- on real uploaded video, which turned out to be variable-frame-rate
+      -- (ffprobe's avg_frame_rate != r_frame_rate on that source, common for
+      -- phone/screen recordings) -- frame-count GOP sizing doesn't map to a
+      -- fixed wall-clock interval under VFR. A time-based forced keyframe
+      -- every HLS_SEGMENT_SECONDS sidesteps needing to probe fps at all and
+      -- is fps-agnostic by construction; verified locally (real VAAPI
+      -- device, the exact source that produced the uneven segments above)
+      -- to produce clean, uniform 6.000000s segments end to end.
+      -- -profile:v (not bare -profile, which ffmpeg warns is ambiguous
+      -- between the video and audio streams) -- confirmed to still resolve
+      -- to the video stream's profile as-is, but that's undocumented
+      -- behavior this ffmpeg version happens to have, not a guarantee.
       codec_args = string.format(
-        "%s -c:v h264_vaapi -rc_mode VBR -b:v %d -maxrate %d -bufsize %d -profile high -level 4.1 -c:a aac -b:a 320k",
-        vf and ("-vf " .. shell_quote(vf)) or "", source_bitrate, maxrate, bufsize
+        "%s -force_key_frames %s -c:v h264_vaapi -rc_mode VBR -b:v %d -maxrate %d -bufsize %d -profile:v high -level 4.1 -c:a aac -b:a 320k",
+        vf and ("-vf " .. shell_quote(vf)) or "",
+        shell_quote(string.format("expr:gte(t,n_forced*%d)", HLS_SEGMENT_SECONDS)),
+        source_bitrate, maxrate, bufsize
       )
     else
       codec_args = "-c copy"
@@ -8203,10 +8227,15 @@ local function ensure_hls_variant(media_id, item, content_fn, quality, opts)
     pre_input_args = string.format(
       "-hwaccel vaapi -hwaccel_output_format vaapi -vaapi_device %s ", shell_quote(vaapi_device())
     )
+    -- force_key_frames + -profile:v: see the identical fix (and its
+    -- verification notes) on the "original"-quality VBR branch above --
+    -- same VFR-source uneven-segment issue applies here too, and this QVBR
+    -- branch is the one that actually runs for every scaled quality tier.
     codec_args = string.format(
-      "%s -c:v h264_vaapi -rc_mode QVBR -global_quality %d -b:v %d -maxrate %d "
-        .. "-profile %s -level 4.1 -c:a aac -b:a %s",
+      "%s -force_key_frames %s -c:v h264_vaapi -rc_mode QVBR -global_quality %d -b:v %d -maxrate %d "
+        .. "-profile:v %s -level 4.1 -c:a aac -b:a %s",
       scale_filter and ("-vf " .. shell_quote(scale_filter .. ",format=nv12,hwupload")) or "",
+      shell_quote(string.format("expr:gte(t,n_forced*%d)", HLS_SEGMENT_SECONDS)),
       profile.crf, ceiling_bps, ceiling_bps,
       vaapi_profile, profile.audio_bitrate
     )
