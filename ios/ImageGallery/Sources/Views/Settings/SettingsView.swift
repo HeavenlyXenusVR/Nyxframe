@@ -253,8 +253,9 @@ struct SettingsView: View {
                 Toggle("Show joined date", isOn: $profileShowJoinedDate)
             }
 
-            Section("Watermark") {
-                TextField("Watermark text (applied to your images)", text: $watermarkText)
+            Section("Watermark", footer: Text("Disabled site-wide -- no longer applied to uploads.")) {
+                TextField("Disabled", text: $watermarkText)
+                    .disabled(true)
                 Button {
                     Task { await saveAppearance() }
                 } label: {

@@ -560,7 +560,7 @@ export function SettingsPage({ ctx }) {
                 <button type="button" className="opt-color-set" onClick={() => updatePrefs("profile_bg_color", "#111111")}>Set color</button>
               )}
             </label>
-            <label className="field"><span>Watermark / Signature Text <small>(overlaid on your uploads)</small></span><input value={prefs.watermark_text ?? ""} onChange={(event) => updatePrefs("watermark_text", event.target.value)} placeholder="Optional text on your uploads (e.g. @handle)" maxLength={40} /></label>
+            <label className="field"><span>Watermark / Signature Text <small>(disabled site-wide -- no longer overlaid on uploads)</small></span><input value={prefs.watermark_text ?? ""} disabled title="Watermarking is disabled site-wide" placeholder="Disabled" maxLength={40} /></label>
           </div>
             <div className="settings-cluster">
             <div className="settings-cluster-head"><h3>Profile Language</h3><p>Decide how the public profile should frame your work and social presence.</p></div>

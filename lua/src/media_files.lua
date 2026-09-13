@@ -723,7 +723,15 @@ local EXT_FOR_MIME = {
 -- unsupported format, ffmpeg error, ...) -- callers must fail OPEN (serve
 -- the original, unwatermarked bytes) rather than error the whole request,
 -- since a cosmetic feature breaking should never take down file serving.
+-- Disabled site-wide -- routes.lua's watermark_text call sites are all
+-- hardcoded to nil for the same reason (drawtext/overlay burn-in was
+-- forcing unwanted re-encodes and saturating CPU/GPU). Kept as an early
+-- return rather than deleted so the feature can be flipped back on in one
+-- place if that tradeoff changes.
+local WATERMARKS_ENABLED = false
+
 function M.apply_watermark(content, mime_type, watermark_text)
+  if not WATERMARKS_ENABLED then return nil end
   local text = tostring(watermark_text or ""):match("^%s*(.-)%s*$")
   if text == "" or not file_exists(WATERMARK_FONT) then return nil end
   local ext = EXT_FOR_MIME[tostring(mime_type or ""):lower()]
@@ -778,6 +786,7 @@ end
 -- text_file_path once the encode finishes), or (nil, nil) if there's no
 -- watermark text configured or the font is missing.
 function M.video_watermark_filter(watermark_text)
+  if not WATERMARKS_ENABLED then return nil, nil end
   local text = tostring(watermark_text or ""):match("^%s*(.-)%s*$")
   if text == "" or not file_exists(WATERMARK_FONT) then return nil, nil end
 

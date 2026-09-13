@@ -99,6 +99,15 @@ local function trim(s)
   return (tostring(s or ""):gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+-- Watermarking is disabled site-wide (see the `watermark_text = nil --
+-- WATERMARKS_ENABLED = false` sites below): the drawtext/overlay burn-in
+-- it required forced a full re-encode on media that would otherwise be
+-- served as-is (or from an existing cached rendition), which was
+-- saturating CPU/GPU on transcodes. Every such site is hardcoded to nil
+-- rather than routed through a shared helper because routes.lua's main
+-- chunk is already at LuaJIT's 200-local ceiling and a new top-level
+-- local (even a function) overflows it.
+
 -- cjson can't tell an empty Lua table `{}` was meant as a JSON array `[]`
 -- vs object `{}` and defaults to encoding it as `{}`  -- wrong for every
 -- list-shaped API field here (media, subcategories, ...) whenever the list
@@ -6979,8 +6988,7 @@ end
 -- needing its own cache.
 local function apply_image_watermark_if_configured(media_id, item, content, mime_type)
   if item.media_kind ~= "image" then return content end
-  local owner = get_user(item.user_id)
-  local watermark_text = owner and owner.user_settings and nn(owner.user_settings.watermark_text)
+  local watermark_text = nil -- WATERMARKS_ENABLED = false (get_user lookup for it removed too)
   if not watermark_text or watermark_text == "" then return content end
 
   local cache_key = sodium.sodium_bin2hex(sodium.crypto_hash_sha256(watermark_text)):sub(1, 16)
@@ -7549,8 +7557,7 @@ local function ensure_video_quality_cache(media_id, item, content, quality)
   if not vaapi_available() then return nil end
 
   local sha_row = db.fetchone("SELECT content_sha256 FROM media_items WHERE id=%s", tostring(media_id))
-  local owner = get_user(item.user_id)
-  local watermark_text = owner and owner.user_settings and nn(owner.user_settings.watermark_text)
+  local watermark_text = nil -- WATERMARKS_ENABLED = false (get_user lookup for it removed too)
   local digest_seed = ((sha_row and nn(sha_row.content_sha256)) or item.updated_at or item.created_at or tostring(media_id))
     .. "|wm=" .. tostring(watermark_text or "")
   local cache_file = video_quality_cache_path(media_id, quality, digest_seed)
@@ -7826,8 +7833,7 @@ local function ensure_hls_variant(media_id, item, content_fn, quality, opts)
   -- the exact "nothing plays" symptom for large uploads.
   if quality ~= "original" and db.toint(item.file_size, 0) > VIDEO_TRANSCODE_SIZE_LIMIT then return nil end
 
-  local owner = get_user(item.user_id)
-  local watermark_text = owner and owner.user_settings and nn(owner.user_settings.watermark_text)
+  local watermark_text = nil -- WATERMARKS_ENABLED = false (get_user lookup for it removed too)
   local digest_seed = media_content_digest_seed(media_id, item, watermark_text)
   local dir = hls_variant_dir(media_id, quality, digest_seed)
 
@@ -8520,8 +8526,7 @@ local function warm_one_pass(cursor_id)
     -- both >0 bytes and under the 500MB cap), but would misfire the moment
     -- either condition wasn't true -- fixed by computing this once,
     -- unconditionally, for every item.
-    local owner = get_user(item.user_id)
-    local watermark_text = owner and owner.user_settings and nn(owner.user_settings.watermark_text)
+    local watermark_text = nil -- WATERMARKS_ENABLED = false (get_user lookup for it removed too)
     local digest_seed = (nn(item.content_sha256) or item.updated_at or item.created_at or tostring(item.id))
       .. "|wm=" .. tostring(watermark_text or "")
 
@@ -9026,8 +9031,7 @@ function M.serve_hls_playlist(req)
   -- path -- and only ever runs on a branch that was about to fail anyway.
   local function best_ready_quality()
     local ladder = { "144p", "480p", "720p", "1080p", "original" }
-    local owner_row = get_user(item.user_id)
-    local wm = owner_row and owner_row.user_settings and nn(owner_row.user_settings.watermark_text)
+    local wm = nil -- WATERMARKS_ENABLED = false (get_user lookup for it removed too)
     local seed = media_content_digest_seed(media_id, item, wm)
     local at = nil
     for i, q in ipairs(ladder) do if q == quality then at = i break end end
@@ -9212,8 +9216,7 @@ function M.serve_hls_segment(req)
   local item, status, body = hls_check_access(req, media_id)
   if not item then return status, body end
 
-  local seg_owner = get_user(item.user_id)
-  local seg_watermark_text = seg_owner and seg_owner.user_settings and nn(seg_owner.user_settings.watermark_text)
+  local seg_watermark_text = nil -- WATERMARKS_ENABLED = false (get_user lookup for it removed too)
   local digest_seed = media_content_digest_seed(media_id, item, seg_watermark_text)
   local dir = hls_variant_dir(media_id, quality, digest_seed)
   local f = io.open(dir .. "/" .. segment, "rb")
