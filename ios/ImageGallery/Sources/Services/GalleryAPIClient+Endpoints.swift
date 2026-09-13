@@ -331,6 +331,53 @@ extension GalleryAPIClient {
     private struct UploadInitBody: Encodable { var totalSize: Int; var filename: String }
     private struct UploadInitResponse: Decodable { var sessionId: String; var chunkSize: Int }
     private struct ChunkAck: Decodable { var ok: Bool; var receivedBytes: Int }
+    /// `upload_chunk_finish` in routes.lua ALWAYS responds 202 with this shape
+    /// (never the finished media synchronously) -- it hands the real work
+    /// (fast-start remux, full-file sha256, up to a 30s AI vision call) to a
+    /// background job and returns immediately. `jobId` is nil only if the
+    /// backend contract ever changes underneath this.
+    private struct UploadFinishAck: Decodable { var status: String; var jobId: String? }
+    private struct UploadJobStatusResponse: Decodable {
+        var status: String
+        var media: MediaItem?
+        var possibleDuplicates: [DuplicateMatch]?
+        var possibleSiteDuplicates: [DuplicateMatch]?
+        var detail: String?
+    }
+
+    /// Polls `GET /api/media/upload/job/:job_id` (`M.upload_job_status` in
+    /// routes.lua) until the background finish job lands on "done"/"error".
+    /// Web's equivalent (`Shell.jsx`) polls this from a global, localStorage-
+    /// backed queue every 6s so the uploader can navigate away immediately;
+    /// this app instead awaits it right here, on the same screen the upload
+    /// was started from, since there's no persisted background-job UI yet.
+    /// The typical case resolves on the very first check -- the comment on
+    /// `upload_chunk_finish` server-side notes a real response "normally
+    /// comes back in well under a second" -- so this checks immediately and
+    /// only sleeps between subsequent polls. Bounded to 6 minutes (jobs
+    /// themselves live 24h server-side, but this call is still on-screen
+    /// waiting, not fire-and-forget) so a stuck job doesn't spin the upload
+    /// UI forever.
+    private func pollUploadJob(jobId: String) async throws -> MediaUploadResponse {
+        let deadline = Date().addingTimeInterval(360)
+        while true {
+            let job: UploadJobStatusResponse = try await requestJSON("/api/media/upload/job/\(jobId)")
+            switch job.status {
+            case "done":
+                guard let media = job.media else {
+                    throw GalleryAPIError.http(status: 0, message: "Upload finished but returned no media.")
+                }
+                return MediaUploadResponse(media: media, possibleDuplicates: job.possibleDuplicates, possibleSiteDuplicates: job.possibleSiteDuplicates)
+            case "error":
+                throw GalleryAPIError.http(status: 0, message: job.detail ?? "Upload failed.")
+            default:
+                if Date() >= deadline {
+                    throw GalleryAPIError.http(status: 0, message: "Upload is taking longer than expected. It may still finish in the background -- check your profile shortly.")
+                }
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+            }
+        }
+    }
 
     /// Splits large files into pieces before sending instead of one giant
     /// request -- this deployment's Cloudflare tunnel hard-413s any single
@@ -367,7 +414,11 @@ extension GalleryAPIClient {
 
         var body = uploadForm(fields)
         body["session_id"] = initResponse.sessionId
-        return try await requestJSON("/api/media/upload/finish", body: body)
+        let finishAck: UploadFinishAck = try await requestJSON("/api/media/upload/finish", body: body)
+        guard let jobId = finishAck.jobId else {
+            throw GalleryAPIError.http(status: 0, message: "Unexpected response finishing upload.")
+        }
+        return try await pollUploadJob(jobId: jobId)
     }
 
     func myMedia(includeDeleted: Bool = true) async throws -> [MediaItem] {

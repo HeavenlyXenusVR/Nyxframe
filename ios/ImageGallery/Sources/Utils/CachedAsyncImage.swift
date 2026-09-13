@@ -1,24 +1,113 @@
+import CryptoKit
 import SwiftUI
 
-/// Shared decoded-image memory cache backing `CachedAsyncImage` below.
-/// `NSCache` (not a plain `Dictionary`) auto-evicts under memory pressure
-/// the same way UIKit's own image caches do, with no manual eviction logic
-/// needed. `countLimit` is a rough backstop, not a tuned budget -- NSCache
-/// already responds to system memory-pressure notifications on its own.
-final class ImageCache {
+/// Shared decoded-image cache backing `CachedAsyncImage` below. Two tiers:
+/// an in-memory `NSCache` (fast, but wiped on relaunch and evicted under
+/// memory pressure) and a disk cache under Caches/ImageCache (survives a
+/// cold relaunch -- previously every thumbnail the user had already seen
+/// was re-downloaded from scratch on every app launch, since the cache was
+/// memory-only). An `actor` (not a plain class) so the in-flight-request
+/// map below is safe to touch from multiple concurrent `CachedAsyncImage`
+/// loads without a manual lock.
+actor ImageCache {
     static let shared = ImageCache()
-    private let cache = NSCache<NSURL, UIImage>()
+
+    private let memory = NSCache<NSURL, UIImage>()
+    private let diskDirectory: URL
+
+    /// Two views mounting the same brand-new URL at the same instant (e.g.
+    /// a grid cell and its own live-preview eligibility check, or a fast
+    /// re-render) used to each fire an independent network fetch -- this
+    /// was a documented, deliberately-deferred gap. Coalesced here: the
+    /// second caller awaits the first caller's in-flight `Task` instead of
+    /// starting its own.
+    private var inFlight: [URL: Task<UIImage, Error>] = [:]
+
+    /// Oldest-first eviction once the disk cache holds more than this many
+    /// files -- mirrors web's `pruneStoredCache` "drop the oldest third"
+    /// approach (`frontend/src/api.js`) rather than tracking a byte budget
+    /// precisely; thumbnails are small and roughly uniform in size, so a
+    /// file-count cap is a good enough proxy for a size cap here.
+    private static let maxDiskEntries = 1200
+    private var storesSinceLastPrune = 0
 
     private init() {
-        cache.countLimit = 300
+        memory.countLimit = 300
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+        diskDirectory = caches.appendingPathComponent("ImageCache", isDirectory: true)
+        try? FileManager.default.createDirectory(at: diskDirectory, withIntermediateDirectories: true)
+    }
+
+    private func diskPath(for url: URL) -> URL {
+        // Swift's `String.hashValue` is randomized per-process (ASLR-seeded),
+        // so it can't be used as a stable on-disk filename across launches --
+        // a real content hash is needed for the cache to actually survive a
+        // relaunch, which is the whole point of the disk tier.
+        let digest = SHA256.hash(data: Data(url.absoluteString.utf8))
+        let hex = digest.map { String(format: "%02x", $0) }.joined()
+        return diskDirectory.appendingPathComponent(hex)
     }
 
     func image(for url: URL) -> UIImage? {
-        cache.object(forKey: url as NSURL)
+        if let hit = memory.object(forKey: url as NSURL) { return hit }
+        guard let data = try? Data(contentsOf: diskPath(for: url)), let decoded = UIImage(data: data) else { return nil }
+        memory.setObject(decoded, forKey: url as NSURL)
+        return decoded
     }
 
-    func store(_ image: UIImage, for url: URL) {
-        cache.setObject(image, forKey: url as NSURL)
+    private func store(_ image: UIImage, data: Data, for url: URL) {
+        memory.setObject(image, forKey: url as NSURL)
+        try? data.write(to: diskPath(for: url), options: .atomic)
+        storesSinceLastPrune += 1
+        if storesSinceLastPrune >= 50 {
+            storesSinceLastPrune = 0
+            pruneDiskCacheIfNeeded()
+        }
+    }
+
+    /// Fetches `url`, coalescing concurrent callers onto one network
+    /// request and one decode. `Task.detached` deliberately does not
+    /// inherit this actor's isolation, so every touch of `ImageCache.shared`
+    /// inside it is an explicit, unambiguous cross-actor `await` -- easier
+    /// to reason about correctly than relying on inherited-isolation rules
+    /// with no compiler in this environment to check the result against.
+    func loadImage(for url: URL) async throws -> UIImage {
+        if let cached = image(for: url) { return cached }
+        if let running = inFlight[url] {
+            return try await running.value
+        }
+        let task = Task.detached(priority: .userInitiated) { () throws -> UIImage in
+            let (data, _) = try await URLSession.shared.data(from: url)
+            guard let uiImage = UIImage(data: data) else {
+                throw URLError(.cannotDecodeContentData)
+            }
+            await ImageCache.shared.store(uiImage, data: data, for: url)
+            return uiImage
+        }
+        inFlight[url] = task
+        do {
+            let result = try await task.value
+            inFlight[url] = nil
+            return result
+        } catch {
+            inFlight[url] = nil
+            throw error
+        }
+    }
+
+    private func pruneDiskCacheIfNeeded() {
+        guard let entries = try? FileManager.default.contentsOfDirectory(at: diskDirectory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        guard entries.count > Self.maxDiskEntries else { return }
+        let withDates = entries.map { fileUrl -> (URL, Date) in
+            let date = (try? fileUrl.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+            return (fileUrl, date)
+        }
+        let sorted = withDates.sorted { $0.1 < $1.1 }
+        let overflow = sorted.count - Self.maxDiskEntries
+        let removeCount = overflow + sorted.count / 4
+        for (fileUrl, _) in sorted.prefix(removeCount) {
+            try? FileManager.default.removeItem(at: fileUrl)
+        }
     }
 }
 
@@ -34,15 +123,9 @@ final class ImageCache {
 /// repeated decode work is the actual cause of "scrolling the feed/detail
 /// view feels laggy" reported live 2026-08-31 -- not a video/GPU problem,
 /// a missing-cache problem. `ImageCache` above keeps already-decoded
-/// `UIImage`s keyed by URL, so a repeat appearance is a synchronous cache
-/// hit instead of a network round trip + decode.
-///
-/// No request de-duplication for two views loading the same brand-new URL
-/// at the exact same moment (each would still fetch independently) --
-/// scrolling re-visits an already-cached image far more often than two
-/// cells race to cold-load the identical URL simultaneously, so the memory
-/// cache alone addresses the reported symptom; coalescing concurrent
-/// in-flight loads would be a real but separate refinement.
+/// `UIImage`s keyed by URL (memory + disk), so a repeat appearance is a
+/// cache hit instead of a network round trip + decode, including across a
+/// cold app relaunch.
 @MainActor
 struct CachedAsyncImage<Content: View>: View {
     private let url: URL?
@@ -65,19 +148,14 @@ struct CachedAsyncImage<Content: View>: View {
             phase = .empty
             return
         }
-        if let cached = ImageCache.shared.image(for: url) {
+        if let cached = await ImageCache.shared.image(for: url) {
             phase = .success(Image(uiImage: cached))
             return
         }
         phase = .empty
         do {
-            let (data, _) = try await URLSession.shared.data(from: url)
+            let uiImage = try await ImageCache.shared.loadImage(for: url)
             guard !Task.isCancelled else { return }
-            guard let uiImage = UIImage(data: data) else {
-                phase = .failure(URLError(.cannotDecodeContentData))
-                return
-            }
-            ImageCache.shared.store(uiImage, for: url)
             phase = .success(Image(uiImage: uiImage))
         } catch {
             guard !Task.isCancelled else { return }
