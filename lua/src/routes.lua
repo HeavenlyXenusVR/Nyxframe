@@ -3411,7 +3411,33 @@ function M.upload_job_status(req)
 
   if job.status == "done" then
     local r = job.response or {}
-    return 200, { status = "done", media = r.media, possible_duplicates = arr(r.possible_duplicates), possible_site_duplicates = arr(r.possible_site_duplicates) }
+    local media = r.media
+    if media then
+      -- job.response was round-tripped through cjson.encode/decode via
+      -- job_write/job_read (disk-persisted so a poll after a worker
+      -- restart can still find it) -- arr()'s cjson.empty_array sentinel
+      -- (used by decode_media_row/attach_media_subcategories to force an
+      -- EMPTY list to encode as `[]` instead of cjson's default `{}` for
+      -- an ambiguous empty table) does not survive that round trip: cjson
+      -- decodes `[]` back into a plain Lua `{}`, indistinguishable from an
+      -- empty object once re-encoded here. Every array-shaped media field
+      -- that happened to be empty (a fresh upload with no subcategories,
+      -- for instance) silently flipped from `[]` to `{}` in this response
+      -- -- harmless to web's untyped JSON handling but a hard decode
+      -- failure for iOS's strict Codable models (confirmed live:
+      -- "Expected value of type Array<Any>... found a dictionary instead"
+      -- at media.subcategoryNames, surfaced only once large images started
+      -- actually reaching this job-polling path). Re-arr() every such
+      -- field here -- the one spot a media object gets serialized a
+      -- second time after a JSON round trip. arr() is idempotent on an
+      -- already-correct non-empty array, so this is safe regardless of
+      -- whether the round trip actually lost anything for a given field.
+      media.tags = arr(media.tags)
+      media.subcategories = arr(media.subcategories)
+      media.subcategory_ids = arr(media.subcategory_ids)
+      media.subcategory_names = arr(media.subcategory_names)
+    end
+    return 200, { status = "done", media = media, possible_duplicates = arr(r.possible_duplicates), possible_site_duplicates = arr(r.possible_site_duplicates) }
   elseif job.status == "error" then
     return 200, { status = "error", detail = job.detail or "Upload failed." }
   end
