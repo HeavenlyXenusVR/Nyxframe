@@ -15,6 +15,7 @@
 
 local routes = require("routes")
 local html = require("html")
+local cjson = require("cjson.safe")
 
 local esc = html.esc
 local parse_urlencoded = html.parse_urlencoded
@@ -379,6 +380,95 @@ local function audit_log_section(req)
 end
 
 -- ---------------------------------------------------------------------------
+-- Telemetry / Ops (see lua/src/telemetry.lua + routes.admin_telemetry)
+-- ---------------------------------------------------------------------------
+
+local function fmt_ago(unix_time)
+  if not unix_time or unix_time == 0 then return "never" end
+  local seconds = os.time() - tonumber(unix_time)
+  if seconds < 5 then return "just now" end
+  if seconds < 90 then return seconds .. "s ago" end
+  if seconds < 5400 then return math.floor(seconds / 60) .. "m ago" end
+  return math.floor(seconds / 3600) .. "h ago"
+end
+
+local function telemetry_section(req)
+  local _, body = routes.admin_telemetry({ headers = req.headers, query = {} })
+  if not body then return '<h2 id="telemetry">Telemetry / Ops</h2><div class="empty">Telemetry unavailable.</div>' end
+
+  local job_cards = {}
+  -- Fixed display order so the panel doesn't reshuffle between loads --
+  -- jobs is a plain name->snapshot map (routes.admin_telemetry/
+  -- telemetry.lua's M.job_snapshot), so iteration order isn't stable.
+  local JOB_ORDER = {
+    "media_warmer", "stale_transcode_cleanup", "hls_idle_reaper",
+    "weekly_digest", "telegram_poll", "db_health_watch",
+  }
+  for _, name in ipairs(JOB_ORDER) do
+    local job = body.jobs and body.jobs[name]
+    if job then
+      job_cards[#job_cards + 1] = ([[
+        <div class="metric">
+          <strong style="color:%s;">%s</strong>
+          <span>%s &middot; last run %s &middot; %dms</span>
+        </div>
+      ]]):format(
+        job.ok and "#9fe8d4" or "#ffb4b4", esc(name),
+        job.ok and "OK" or "ERROR", fmt_ago(job.at), tonumber(job.duration_ms) or 0
+      )
+    end
+  end
+
+  local route_rows = {}
+  for _, r in ipairs(html.as_list(body.request_stats)) do
+    route_rows[#route_rows + 1] = ("<tr><td>%s</td><td>%s</td><td>%s</td><td>%sms</td><td>%sms</td></tr>"):format(
+      esc(r.route), esc(r.count), esc(r.error_count), esc(r.avg_ms), esc(r.p95_ms)
+    )
+  end
+
+  local event_rows = {}
+  for _, e in ipairs(html.as_list(body.recent_events)) do
+    local meta_text = ""
+    if e.meta and e.meta ~= "" then
+      -- telemetry_events.meta is a JSONB column -- pg.lua hands it back as
+      -- raw JSON text (same reason digest.lua/routes.lua cjson.decode()
+      -- other jsonb columns like user_settings), not an already-decoded
+      -- Lua table.
+      local ok, decoded = pcall(cjson.decode, e.meta)
+      if ok and type(decoded) == "table" then
+        local parts = {}
+        for k, v in pairs(decoded) do parts[#parts + 1] = tostring(k) .. "=" .. tostring(v) end
+        meta_text = table.concat(parts, " ")
+      end
+    end
+    event_rows[#event_rows + 1] = ("<tr><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td></tr>"):format(
+      esc(format_date(e.created_at)), esc(e.event_type), esc(e.subject or ""), esc(e.outcome or ""),
+      esc(e.duration_ms or ""), esc(meta_text)
+    )
+  end
+
+  return ([[
+    <h2 id="telemetry">Telemetry / Ops</h2>
+    <h3 style="font-size:14px;">Background jobs</h3>
+    <div class="metric-grid">%s</div>
+    <h3 style="font-size:14px;">Transcode slots</h3>
+    <div class="metric-grid">
+      <div class="metric"><strong>%s / %s</strong><span>Active concurrency slots</span></div>
+    </div>
+    <h3 style="font-size:14px;">Request latency (since %s)</h3>
+    <table><thead><tr><th>Route</th><th>Count</th><th>Errors</th><th>Avg</th><th>p95</th></tr></thead><tbody>%s</tbody></table>
+    <h3 style="font-size:14px;margin-top:20px;">Recent events</h3>
+    <table><thead><tr><th>When</th><th>Type</th><th>Subject</th><th>Outcome</th><th>ms</th><th>Detail</th></tr></thead><tbody>%s</tbody></table>
+  ]]):format(
+    #job_cards > 0 and table.concat(job_cards, "") or '<div class="empty">No job runs recorded yet.</div>',
+    esc(body.transcode_active_slots), esc(body.transcode_max_concurrent),
+    esc(fmt_ago(body.request_stats_since)),
+    #route_rows > 0 and table.concat(route_rows, "") or "<tr><td colspan=\"5\">No requests recorded yet.</td></tr>",
+    #event_rows > 0 and table.concat(event_rows, "") or "<tr><td colspan=\"6\">No events recorded yet.</td></tr>"
+  )
+end
+
+-- ---------------------------------------------------------------------------
 -- Page + actions
 -- ---------------------------------------------------------------------------
 
@@ -388,6 +478,7 @@ function M.admin_page(req)
   local flash = req.query.flash
 
   local body = table.concat({
+    telemetry_section(req),
     reports_section(req, owner),
     flagged_section(req),
     users_section(req),

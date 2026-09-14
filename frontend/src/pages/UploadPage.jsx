@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Upload, WandSparkles } from "lucide-react";
-import { apiFetch, clearApiCache, readToken, resolveApiUrl } from "../api.js";
+import { apiFetch, clearApiCache, postClientDiagnostic, readToken, resolveApiUrl } from "../api.js";
 import { MAX_UPLOAD_BYTES } from "../config.js";
 import { addPendingUploadJob } from "../uploadJobs.js";
 import { ChipRow, Page, RequireLogin } from "../components/ui.jsx";
@@ -196,6 +196,18 @@ export function UploadPage({ ctx }) {
     }
     setBusy(true);
     setUploadProgress(0);
+    const uploadT0 = performance.now();
+    let uploadMethod = "direct";
+    let chunkCount = 0;
+    const reportUploadDiagnostic = (outcome, errorMessage) => postClientDiagnostic("/api/media/upload/diagnostics", {
+      outcome,
+      method: uploadMethod,
+      duration_ms: Math.round(performance.now() - uploadT0),
+      bytes: form.file.size,
+      chunk_count: chunkCount || undefined,
+      retry_count: 0, // no chunk-retry logic exists yet -- see xhrJson's single-attempt send
+      error_message: errorMessage,
+    });
     try {
       const body = new FormData();
       if (form.file) body.set("file", form.file);
@@ -230,6 +242,7 @@ export function UploadPage({ ctx }) {
           },
         });
       } else {
+        uploadMethod = "chunked";
         const init = await apiFetch("/api/media/upload/init", {
           method: "POST",
           timeoutMs: UPLOAD_TIMEOUT_MS,
@@ -249,6 +262,7 @@ export function UploadPage({ ctx }) {
             },
           });
           uploaded += chunk.size;
+          chunkCount += 1;
           setUploadProgress(Math.round((uploaded / form.file.size) * 100));
         }
         const metadata = Object.fromEntries([...body.entries()].filter(([key]) => key !== "file"));
@@ -281,6 +295,11 @@ export function UploadPage({ ctx }) {
         // leave immediately.
         addPendingUploadJob({ jobId: data.job_id, filename: form.file.name });
         ctx.showToast("Upload queued — processing in the background. We'll let you know when it's ready.", "info");
+        // "success" here means the upload itself (the part this page and its
+        // timing actually cover) went through -- the background finish job's
+        // own outcome is separately covered by routes.lua's "upload"/
+        // "chunked" telemetry.record call once it completes.
+        reportUploadDiagnostic("success");
         navigate("/profile");
         return;
       }
@@ -300,8 +319,10 @@ export function UploadPage({ ctx }) {
       } else {
         ctx.showToast("Upload saved.", "success");
       }
+      reportUploadDiagnostic("success");
       navigate(`/media/${data.media.id}`);
     } catch (error) {
+      reportUploadDiagnostic("error", String(error.message || "").slice(0, 300));
       ctx.showToast(error.message, "error");
       setUploadProgress(0);
     } finally {

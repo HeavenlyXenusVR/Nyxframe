@@ -12,11 +12,20 @@ local pages_auth = require("pages_auth")
 local pages_admin = require("pages_admin")
 local pages_totp = require("pages_totp")
 local pages_feeds = require("pages_feeds")
+local telemetry = require("telemetry")
 
 local settings = config.load()
 routes.settings = settings
 db.init(settings)
 require("discord_bot").init(settings)
+
+-- In-depth telemetry (lua/src/telemetry.lua): request latency/error stats,
+-- background-job outcomes, uploads/auth/media-diagnostics event rows. Hooked
+-- into httpd.lua via a plain settable field (M.on_request) rather than a
+-- `require("telemetry")` inside httpd.lua itself, so that file stays
+-- decoupled from the telemetry/db modules.
+telemetry.init(settings)
+httpd.on_request = telemetry.record_request
 
 -- Only trust X-Forwarded-For from these peers (see config.lua's
 -- trusted_proxy_cidrs doc comment and httpd.lua's client-IP resolution) --
@@ -109,6 +118,7 @@ httpd.route("POST", "/api/media/upload/init", routes.upload_chunk_init)
 httpd.route("POST", "/api/media/upload/chunk", routes.upload_chunk_append)
 httpd.route("POST", "/api/media/upload/finish", routes.upload_chunk_finish)
 httpd.route("GET", "/api/media/upload/job/:job_id", routes.upload_job_status)
+httpd.route("POST", "/api/media/upload/diagnostics", routes.upload_client_diagnostic)
 httpd.route("GET", "/api/media/trending", routes.media_trending)
 -- ROUTE-ORDERING TRAP for future passes: httpd.lua's match_route() returns
 -- the FIRST registered route whose pattern matches, with no most-specific-
@@ -132,6 +142,7 @@ httpd.route("POST", "/api/media/:media_id/restore", routes.restore_media)
 httpd.route("POST", "/api/media/:media_id/report", routes.report_media)
 httpd.route("POST", "/api/media/:media_id/ai/train", routes.train_media_ai)
 httpd.route("POST", "/api/media/:media_id/diagnostics/load", routes.media_load_diagnostic)
+httpd.route("POST", "/api/media/:media_id/diagnostics/playback", routes.media_playback_diagnostic)
 httpd.route("GET", "/api/me/personal-tags", routes.my_personal_tags)
 httpd.route("POST", "/api/media/:media_id/personal-tags", routes.add_personal_tag)
 httpd.route("DELETE", "/api/media/:media_id/personal-tags/:tag", routes.remove_personal_tag)
@@ -218,6 +229,7 @@ httpd.route("POST", "/api/saved-searches", routes.create_saved_search)
 httpd.route("DELETE", "/api/saved-searches/:search_id", routes.delete_saved_search)
 
 httpd.route("GET", "/api/stats", routes.admin_stats)
+httpd.route("GET", "/api/admin/telemetry", routes.admin_telemetry)
 httpd.route("GET", "/api/admin/reports", routes.admin_list_reports)
 httpd.route("POST", "/api/admin/reports/:report_id/resolve", routes.admin_resolve_report)
 httpd.route("POST", "/api/admin/users/:user_id/ban", routes.admin_ban_user)
@@ -373,6 +385,12 @@ if is_primary_worker and transcode_cleanup_enabled then routes.start_stale_trans
 local hls_idle_reaper_enabled = (os.getenv("GALLERY_ENABLE_HLS_IDLE_REAPER") or "true"):lower()
 hls_idle_reaper_enabled = hls_idle_reaper_enabled == "true" or hls_idle_reaper_enabled == "1" or hls_idle_reaper_enabled == "yes"
 if is_primary_worker and hls_idle_reaper_enabled then routes.start_hls_idle_reaper() end
+
+-- Telemetry retention pruner (see telemetry.lua's M.start_pruner) -- same
+-- primary-worker gate as every other background loop above: every worker
+-- would otherwise DELETE against the same shared telemetry_events table on
+-- its own timer, which is harmless but pointlessly redundant.
+if is_primary_worker then telemetry.start_pruner() end
 
 httpd.listen(settings.host, settings.port)
 print(string.format("[nyxframe] listening on %s:%d", settings.host, settings.port))

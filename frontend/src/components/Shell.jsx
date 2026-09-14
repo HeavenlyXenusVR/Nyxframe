@@ -38,10 +38,15 @@ export function Shell({ ctx, children, className = "", style }) {
   useLiveRefresh(async () => {
     const jobs = getPendingUploadJobs();
     if (!jobs.length) return;
-    for (const job of jobs) {
+    // Polled in parallel, not one-at-a-time: with N pending jobs, an
+    // await-in-a-for-loop turned every 6s tick into N sequential round
+    // trips (N x latency instead of ~1x) -- harmless for the common
+    // single-upload case, but needlessly slow whenever more than one
+    // upload is in flight at once.
+    await Promise.all(jobs.map(async (job) => {
       try {
         const data = await apiFetch(`/api/media/upload/job/${encodeURIComponent(job.jobId)}`);
-        if (data.status === "processing") continue;
+        if (data.status === "processing") return;
         removePendingUploadJob(job.jobId);
         if (data.status === "done") {
           ctx.showToast(`"${job.filename}" finished uploading.`, "success");
@@ -57,7 +62,7 @@ export function Shell({ ctx, children, className = "", style }) {
         // the toast isn't losing the upload.
         removePendingUploadJob(job.jobId);
       }
-    }
+    }));
   }, { interval: 6_000, immediate: true, enabled: Boolean(ctx.user) });
 
   useEffect(() => {

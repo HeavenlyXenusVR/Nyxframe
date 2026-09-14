@@ -22,6 +22,7 @@ local db = require("db")
 local cjson = require("cjson.safe")
 local discord_webhook = require("discord_webhook")
 local routes = require("routes")
+local telemetry = require("telemetry")
 
 local M = {}
 local settings
@@ -88,28 +89,41 @@ local function send_digest_for_user(user_row, week_start, origin)
     fields = fields,
     color = 0x37c9a7,
   } })
+  return true
 end
 
+-- Returns how many creators actually got sent a digest this run, so
+-- digest_loop can report it as job telemetry instead of a silent no-op.
 local function run_digest()
   local now_t = os.time()
   local week_start = week_start_utc(now_t)
   local origin = settings.public_origin
+  local sent = 0
   for _, user_row in ipairs(creators_with_webhook()) do
-    send_digest_for_user(user_row, week_start, origin)
+    if send_digest_for_user(user_row, week_start, origin) then sent = sent + 1 end
   end
+  return sent
 end
 
 local function digest_loop()
   local copas = require("copas")
   while true do
-    local ok, err = pcall(function()
+    local telemetry_t0 = telemetry.now()
+    local ok, sent_or_err = pcall(function()
       local d = os.date("!*t", os.time())
       if d.wday == settings.digest_send_weekday and d.hour >= settings.digest_send_hour then
-        run_digest()
+        return run_digest()
       end
+      return nil
     end)
+    local telemetry_ms = telemetry.ms_since(telemetry_t0)
     if not ok then
-      print("[nyxframe] digest loop error: " .. tostring(err))
+      print("[nyxframe] digest loop error: " .. tostring(sent_or_err))
+      telemetry.job_result("weekly_digest", false, telemetry_ms, { error = tostring(sent_or_err):sub(1, 300) })
+    elseif sent_or_err and sent_or_err > 0 then
+      telemetry.job_result("weekly_digest", true, telemetry_ms, { sent = sent_or_err })
+    else
+      telemetry.job_result("weekly_digest", true, telemetry_ms, nil)
     end
     copas.pause(21600)
   end

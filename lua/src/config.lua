@@ -165,6 +165,14 @@ function M.load()
     -- is a hard kill-switch on a name .env can never touch.
     telegram_force_disabled = env_bool("GALLERY_LUA_TELEGRAM_FORCE_DISABLE", false),
     ai_training_examples_limit = math.max(0, math.min(1000, env_int("GALLERY_AI_TRAINING_EXAMPLES_LIMIT", 300))),
+
+    -- lua/src/telemetry.lua: durable telemetry_events rows (uploads, auth,
+    -- background-job outcomes, media diagnostics) plus in-memory request/job
+    -- stats surfaced at GET /api/admin/telemetry. Retention is enforced by a
+    -- background pruner (see telemetry.lua's M.start_pruner), not by this
+    -- config value directly.
+    telemetry_enabled = env_bool("GALLERY_TELEMETRY_ENABLED", true),
+    telemetry_retention_days = math.max(1, env_int("GALLERY_TELEMETRY_RETENTION_DAYS", 14)),
   }
 end
 

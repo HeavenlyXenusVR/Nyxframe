@@ -17,6 +17,7 @@
 
 local db = require("db")
 local cjson = require("cjson.safe")
+local telemetry = require("telemetry")
 
 local M = {}
 
@@ -334,6 +335,7 @@ local function poll_loop()
   local backoff = 5
   local copas = require("copas")
   while true do
+    local telemetry_t0 = telemetry.now()
     local ok, err = pcall(function()
       local params = { timeout = tostring(25), allowed_updates = cjson.encode({ "message" }) }
       if offset ~= nil then params.offset = tostring(offset) end
@@ -346,6 +348,11 @@ local function poll_loop()
       status.last_error = ""
       backoff = 5
     end)
+    -- job_result only ever writes a durable row on failure (see its own
+    -- header comment) -- a success here just refreshes the in-memory "last
+    -- successful poll" snapshot, so this ~25-35s loop doesn't turn into a
+    -- DB write every iteration.
+    telemetry.job_result("telegram_poll", ok, telemetry.ms_since(telemetry_t0), (not ok) and { error = tostring(err):sub(1, 300) } or nil)
     if not ok then
       status.last_error = tostring(err):sub(1, 240)
       print("[nyxframe] Telegram polling error: " .. tostring(err))
@@ -383,7 +390,9 @@ local function health_watch_loop()
   local copas = require("copas")
   copas.pause(20)
   while true do
+    local telemetry_t0 = telemetry.now()
     local ok, err = db.ping()
+    telemetry.job_result("db_health_watch", ok, telemetry.ms_since(telemetry_t0), (not ok) and { error = tostring(err):sub(1, 300) } or nil)
     if not ok then
       print("[nyxframe] Telegram health watch: database ping failed: " .. tostring(err))
       M.send_alert("db", "Nyxframe database problem", tostring(err):sub(1, 240))

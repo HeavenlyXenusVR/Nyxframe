@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { reportMediaPlaybackDiagnostic } from "../utils/media.js";
 import {
   AlertCircle,
   Gauge,
@@ -49,7 +50,7 @@ function pickCompatFallbackQuality(currentQuality, options) {
   return options.find(([v]) => v === "1080p" || v === "720p" || v === "480p" || v === "144p");
 }
 
-export function VideoPlayer({ src, poster, quality, onQualityChange, qualityOptions, title }) {
+export function VideoPlayer({ src, poster, quality, onQualityChange, qualityOptions, title, mediaId }) {
   const videoRef = useRef(null);
   const containerRef = useRef(null);
   const controlsHideTimer = useRef(null);
@@ -96,6 +97,31 @@ export function VideoPlayer({ src, poster, quality, onQualityChange, qualityOpti
   // ─── Auto-play tracking ──────────────────────────────────────────────────────
   // Set to true once the user has clicked play; thereafter onCanPlay will resume.
   const shouldAutoPlayRef = useRef(false);
+
+  // ─── Playback telemetry (reportMediaPlaybackDiagnostic on unmount) ──────────
+  // Accumulated for the whole component lifetime (a quality switch keeps
+  // adding to the same session rather than resetting it) except
+  // time-to-first-frame, which only makes sense for the very first load.
+  // mediaId/quality read via refs so the unmount cleanup (below, in an
+  // effect that only runs once) sees their latest values instead of
+  // whatever they were on first render -- same pattern this file already
+  // uses for volumeRef.
+  const playbackStatsRef = useRef({
+    loadStartedAt: null, firstFrameMs: null, stallCount: 0, stallStartedAt: null,
+    stallTotalMs: 0, downgradeCount: 0, usingHlsJs: false, hasPlayedOnce: false, fatalError: false,
+  });
+  const mediaIdRef = useRef(mediaId);
+  mediaIdRef.current = mediaId;
+  const qualityRef = useRef(quality);
+  qualityRef.current = quality;
+  // Every terminal (non-recovered) failure in this component goes through
+  // `error` state one way or another (onError's several branches, hls.js's
+  // ERROR handler) -- watching it here instead of editing each of those
+  // call sites individually is what lets this stay a single, low-risk
+  // addition rather than touching the carefully-tuned recovery logic below.
+  useEffect(() => {
+    if (error) playbackStatsRef.current.fatalError = true;
+  }, [error]);
 
   // ─── Controls auto-hide ─────────────────────────────────────────────────────
   const scheduleHide = useCallback(() => {
@@ -145,6 +171,13 @@ export function VideoPlayer({ src, poster, quality, onQualityChange, qualityOpti
       setBuffering(false);
       scheduleHide();
       dispatchAudibleState();
+      const stats = playbackStatsRef.current;
+      if (!stats.hasPlayedOnce) {
+        stats.hasPlayedOnce = true;
+        if (stats.firstFrameMs === null && stats.loadStartedAt !== null) {
+          stats.firstFrameMs = Math.round(performance.now() - stats.loadStartedAt);
+        }
+      }
     };
     const onPause = () => {
       setPlaying(false);
@@ -161,6 +194,9 @@ export function VideoPlayer({ src, poster, quality, onQualityChange, qualityOpti
       setBuffering(true);
       if (bufferingTimerRef.current) clearTimeout(bufferingTimerRef.current);
       bufferingTimerRef.current = setTimeout(() => setBufferingLong(true), 3000);
+      const stats = playbackStatsRef.current;
+      stats.stallCount += 1;
+      if (stats.stallStartedAt === null) stats.stallStartedAt = performance.now();
     };
     const onCanPlay = () => {
       setBuffering(false);
@@ -168,6 +204,11 @@ export function VideoPlayer({ src, poster, quality, onQualityChange, qualityOpti
       nativeNetworkRetriesRef.current = 0;
       decodeRetriesRef.current = 0;
       if (bufferingTimerRef.current) { clearTimeout(bufferingTimerRef.current); bufferingTimerRef.current = null; }
+      const stats = playbackStatsRef.current;
+      if (stats.stallStartedAt !== null) {
+        stats.stallTotalMs += Math.round(performance.now() - stats.stallStartedAt);
+        stats.stallStartedAt = null;
+      }
       // Restore seek position after quality switch
       if (pendingRestoreRef.current) {
         const { time, wasPlaying } = pendingRestoreRef.current;
@@ -236,6 +277,7 @@ export function VideoPlayer({ src, poster, quality, onQualityChange, qualityOpti
         const fallback = pickCompatFallbackQuality(quality, qualityOptions);
         if (onQualityChange && fallback) {
           setError(`This format isn't supported by your browser. Switching to ${fallback[1] || fallback[0]}…`);
+          playbackStatsRef.current.downgradeCount += 1;
           onQualityChange(fallback[0]);
         } else {
           setError("This format isn't supported by your browser. Try switching to a lower quality.");
@@ -294,6 +336,22 @@ export function VideoPlayer({ src, poster, quality, onQualityChange, qualityOpti
       // no-op and removes any chance of this being the one path that
       // still gets the old play-vs-audible distinction wrong).
       window.dispatchEvent(new CustomEvent("nyxframe:video-playing", { detail: { playing: false } }));
+
+      // This effect only mounts/unmounts once for the component's whole
+      // lifetime (its dep, scheduleHide, is a stable useCallback with no
+      // deps) -- so this cleanup running is a real player teardown, the
+      // right (and only) point to report the accumulated session stats.
+      const stats = playbackStatsRef.current;
+      reportMediaPlaybackDiagnostic({
+        mediaId: mediaIdRef.current,
+        outcome: stats.fatalError ? "error" : stats.hasPlayedOnce ? "played" : "abandoned",
+        quality: qualityRef.current,
+        timeToFirstFrameMs: stats.firstFrameMs,
+        stallCount: stats.stallCount,
+        stallTotalMs: stats.stallTotalMs,
+        qualityDowngradeCount: stats.downgradeCount,
+        usingHlsJs: stats.usingHlsJs,
+      });
     };
   }, [scheduleHide]);
 
@@ -319,6 +377,10 @@ export function VideoPlayer({ src, poster, quality, onQualityChange, qualityOpti
     if (bufferingTimerRef.current) { clearTimeout(bufferingTimerRef.current); bufferingTimerRef.current = null; }
 
     const isQualitySwitch = Boolean(prevSrcRef.current && prevSrcRef.current !== src);
+    // Time-to-first-frame only means something for the very first load of a
+    // playback session -- a quality switch's own "first frame" is really a
+    // seek-restore, already tracked separately by pendingRestoreRef.
+    if (!isQualitySwitch) playbackStatsRef.current.loadStartedAt = performance.now();
     let pendingRestore = null;
     if (isQualitySwitch) {
       const savedTime = video.currentTime || 0;
@@ -354,6 +416,7 @@ export function VideoPlayer({ src, poster, quality, onQualityChange, qualityOpti
     const isHlsSrc = src.includes(".m3u8");
     const hasNativeHls = video.canPlayType("application/vnd.apple.mpegurl") !== "";
     if (isHlsSrc && !hasNativeHls) {
+      playbackStatsRef.current.usingHlsJs = true;
       // Deferred so pages with no video playing never pay hls.js's bundle
       // cost — only actually loaded once a real HLS source needs it.
       import("hls.js").then(({ default: Hls }) => {
@@ -402,6 +465,7 @@ export function VideoPlayer({ src, poster, quality, onQualityChange, qualityOpti
             const fallback = pickCompatFallbackQuality(quality, qualityOptions);
             if (onQualityChange && fallback) {
               setError(`This format isn't supported by your browser. Switching to ${fallback[1] || fallback[0]}…`);
+              playbackStatsRef.current.downgradeCount += 1;
               onQualityChange(fallback[0]);
             } else {
               setError("Decoding error — the video format may not be supported.");

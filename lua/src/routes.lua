@@ -77,6 +77,12 @@ local with_user_urls
 
 local M = {}
 M.settings = nil -- set by main.lua
+-- A field on the already-declared M local, not a new top-level local -- this
+-- file's main chunk is already at LuaJIT's 200-local ceiling (see the
+-- range_io/transcode comments further down), so `local telemetry =
+-- require(...)` here would overflow it. Every instrumentation call below
+-- goes through M.telemetry.* instead of a bare local.
+M.telemetry = require("telemetry")
 
 local function json_body(req)
   if req.json and next(req.json) ~= nil then return req.json end
@@ -407,7 +413,11 @@ function M.register(req)
     "INSERT INTO users (username, display_name, password_hash, email) VALUES (%s, %s, %s, %s) RETURNING id",
     username, display_name, password_hash, email
   )
-  if not row then return 500, { detail = "Registration failed: " .. tostring(err) } end
+  if not row then
+    M.telemetry.record("auth", "register", "error", nil, { username = username })
+    return 500, { detail = "Registration failed: " .. tostring(err) }
+  end
+  M.telemetry.record("auth", "register", "success", nil, { username = username })
   local user = get_user(row.id)
   local token = gauth.issue_token(M.settings.session_secret, user, M.settings.api_token_ttl_seconds)
   return 200, {
@@ -448,12 +458,18 @@ function M.login(req)
 
   db.execute("INSERT INTO auth_attempts (username, ip_address, successful) VALUES (%s, %s, %s)",
     username_raw ~= "" and username_raw or nil, ip:sub(1, 64), password_ok and true or false)
+  -- In-memory only, not a telemetry_events row: auth_attempts (just above)
+  -- already durably records every attempt -- this only feeds the admin
+  -- telemetry panel's live success/failure rate without a second DB write
+  -- per login.
+  M.telemetry.count(password_ok and "auth_login_success" or "auth_login_failure")
 
   if not password_ok then return 401, { detail = "Invalid username or password." } end
 
   db.execute("UPDATE users SET last_login_at=now(), last_seen_at=now() WHERE id=%s", row.id)
   local user = get_user(row.id)
   if is_actively_banned(user) then
+    M.telemetry.count("auth_login_banned")
     return 403, { detail = nn(user.ban_reason) or "Your account has been suspended." }
   end
   if user.totp_enabled then
@@ -2865,10 +2881,13 @@ local function finalize_upload(req, user, source, original_filename, form)
   -- broken/unreachable AI provider must never fail the upload itself).
   local analysis = nil
   if auto_ai and M.settings.ai_enabled and (media_kind == "image" or media_kind == "video") then
+    local telemetry_t0 = M.telemetry.now()
     local ok, result = pcall(ai_metadata.analyze_media_bytes, {
       content = source.content, file_path = source.file_path, filename = original_filename, mime_type = sniffed_mime, media_kind = media_kind,
       title_hint = title_raw, description_hint = description_raw, tags_hint = tags_hint, settings = M.settings,
     })
+    M.telemetry.record("upload", "ai_analyze", ok and "success" or "error", M.telemetry.ms_since(telemetry_t0),
+      { provider = M.settings.ai_provider, media_kind = media_kind, error = (not ok) and tostring(result):sub(1, 300) or nil })
     if ok then analysis = result end
   end
   finalize_upload_debug_mark("ai analysis done", debug_t0)
@@ -3038,7 +3057,11 @@ function M.upload_media(req)
   if rl_status then return rl_status, rl_body end
 
   local original_filename = ((upload.filename or "upload"):match("([^/\\]+)$") or "upload"):sub(1, 255)
-  return finalize_upload(req, user, { content = upload.content }, original_filename, form)
+  local telemetry_t0 = M.telemetry.now()
+  local up_status, up_body, up_headers = finalize_upload(req, user, { content = upload.content }, original_filename, form)
+  M.telemetry.record("upload", "direct", up_status == 200 and "success" or "error", M.telemetry.ms_since(telemetry_t0),
+    { bytes = #upload.content, media_id = up_status == 200 and up_body and up_body.media and up_body.media.id or nil, status = up_status })
+  return up_status, up_body, up_headers
 end
 
 -- ---------------------------------------------------------------------------
@@ -3369,12 +3392,15 @@ function M.upload_chunk_finish(req)
   -- path/query/headers/etc), not the live socket, so referencing it after
   -- this handler's own response has already gone out is fine.
   copas.addthread(function()
+    local telemetry_t0 = M.telemetry.now()
     local ok, status_code, resp_body = pcall(
       finalize_upload, req, user, { file_path = temp_path, file_size = total_size }, session.filename, pseudo_form
     )
     pcall(os.remove, temp_path)
+    local telemetry_duration_ms = M.telemetry.ms_since(telemetry_t0)
     if not ok then
       print("[nyxframe] background upload finish error (job " .. job_id .. "): " .. tostring(status_code))
+      M.telemetry.record("upload", "chunked", "error", telemetry_duration_ms, { bytes = total_size, detail = tostring(status_code):sub(1, 300) })
       upload_chunk_storage.job_write(job_id, {
         user_id = user.id, status = "error", created_at = os.time(),
         detail = "Upload processing failed unexpectedly.",
@@ -3382,8 +3408,12 @@ function M.upload_chunk_finish(req)
       return
     end
     if status_code == 200 then
+      M.telemetry.record("upload", "chunked", "success", telemetry_duration_ms,
+        { bytes = total_size, media_id = resp_body and resp_body.media and resp_body.media.id or nil })
       upload_chunk_storage.job_write(job_id, { user_id = user.id, status = "done", created_at = os.time(), response = resp_body })
     else
+      M.telemetry.record("upload", "chunked", "error", telemetry_duration_ms,
+        { bytes = total_size, status = status_code, detail = (resp_body and resp_body.detail) or "Upload failed." })
       upload_chunk_storage.job_write(job_id, {
         user_id = user.id, status = "error", created_at = os.time(),
         detail = (resp_body and resp_body.detail) or "Upload failed.",
@@ -3474,10 +3504,13 @@ function M.analyze_media(req)
 
   local analysis
   if M.settings.ai_enabled and (media_kind == "image" or media_kind == "video") then
+    local telemetry_t0 = M.telemetry.now()
     local ok, result = pcall(ai_metadata.analyze_media_bytes, {
       content = upload.content, filename = original_filename, mime_type = sniffed_mime, media_kind = media_kind,
       title_hint = title_hint, description_hint = description_hint, tags_hint = tags_hint, settings = M.settings,
     })
+    M.telemetry.record("upload", "ai_analyze", ok and "success" or "error", M.telemetry.ms_since(telemetry_t0),
+      { provider = M.settings.ai_provider, media_kind = media_kind, error = (not ok) and tostring(result):sub(1, 300) or nil })
     if ok then analysis = result end
   end
   if not analysis then
@@ -6817,6 +6850,58 @@ function M.media_load_diagnostic(req)
     selected_source ~= "" and selected_source or "none", media_kind ~= "" and media_kind or "unknown",
     tostring(auth and auth.id or 0)
   ))
+  M.telemetry.record("media_load", media_id, outcome ~= "" and outcome or "unknown", nil, {
+    context = context ~= "" and context or nil, selected_source = selected_source ~= "" and selected_source or nil,
+    media_kind = media_kind ~= "" and media_kind or nil, viewer_id = auth and auth.id or nil,
+  })
+  return 200, { ok = true }
+end
+
+-- Client-side video/HLS playback telemetry -- companion to
+-- media_load_diagnostic above, but for the richer set of events only
+-- VideoPlayer.jsx can observe (time-to-first-frame, buffering stalls,
+-- quality downgrades, final outcome). Same "never blocks/affects the actual
+-- playback" contract: this only ever records what already happened.
+function M.media_playback_diagnostic(req)
+  local media_id = tonumber(req.params.media_id)
+  local auth = auth_optional(req)
+  local payload = json_body(req)
+  local outcome = tostring(nn(payload.outcome) or ""):lower():sub(1, 32)
+  local quality = tostring(nn(payload.quality) or ""):lower():sub(1, 16)
+  local ttff_ms = tonumber(payload.time_to_first_frame_ms)
+  local stall_count = math.max(0, math.floor(tonumber(payload.stall_count) or 0))
+  local stall_ms = math.max(0, math.floor(tonumber(payload.stall_total_ms) or 0))
+  local downgrade_count = math.max(0, math.floor(tonumber(payload.quality_downgrade_count) or 0))
+  local using_hls_js = payload.using_hls_js and true or false
+  M.telemetry.record("media_playback", media_id, outcome ~= "" and outcome or "unknown", ttff_ms and math.floor(ttff_ms) or nil, {
+    quality = quality ~= "" and quality or nil, stall_count = stall_count, stall_total_ms = stall_ms,
+    quality_downgrade_count = downgrade_count, using_hls_js = using_hls_js, viewer_id = auth and auth.id or nil,
+  })
+  return 200, { ok = true }
+end
+
+-- Fire-and-forget upload-experience beacon from the client (UploadPage.jsx),
+-- posted once a direct or chunked upload settles -- there's no media_id yet
+-- at that point (that's the whole reason this isn't just another
+-- media_load_diagnostic-style per-media endpoint), so this is keyed by
+-- upload outcome/size/timing only, same "never affects the actual upload"
+-- contract as the other client diagnostics beacons.
+function M.upload_client_diagnostic(req)
+  local auth = auth_optional(req)
+  local payload = json_body(req)
+  local outcome = tostring(nn(payload.outcome) or ""):lower():sub(1, 32)
+  local method = tostring(nn(payload.method) or ""):lower():sub(1, 16) -- "direct" | "chunked"
+  local duration_ms = tonumber(payload.duration_ms)
+  local bytes = tonumber(payload.bytes)
+  local chunk_count = tonumber(payload.chunk_count)
+  local retry_count = tonumber(payload.retry_count)
+  local error_message = nn(payload.error_message)
+  M.telemetry.record("upload", "client_" .. (method ~= "" and method or "unknown"), outcome ~= "" and outcome or "unknown",
+    duration_ms and math.floor(duration_ms) or nil, {
+      bytes = bytes and math.floor(bytes) or nil, chunk_count = chunk_count and math.floor(chunk_count) or nil,
+      retry_count = retry_count and math.floor(retry_count) or nil,
+      error = error_message and error_message:sub(1, 300) or nil, viewer_id = auth and auth.id or nil,
+    })
   return 200, { ok = true }
 end
 
@@ -8630,20 +8715,30 @@ function M.start_media_warmer()
   copas.addthread(function()
     local cursor = 0
     while true do
+      local telemetry_t0 = M.telemetry.now()
       local ok, status, next_cursor = pcall(warm_one_pass, cursor)
+      local telemetry_ms = M.telemetry.ms_since(telemetry_t0)
       if not ok then
         print("[nyxframe] media warmer error: " .. tostring(status))
+        M.telemetry.job_result("media_warmer", false, telemetry_ms, { error = tostring(status):sub(1, 300) })
         copas.sleep(WARM_IDLE_PAUSE_SECONDS)
       elseif status == "wrap" then
+        M.telemetry.job_result("media_warmer", true, telemetry_ms, nil)
         cursor = 0
         copas.sleep(WARM_IDLE_PAUSE_SECONDS)
       elseif status == "busy" then
+        M.telemetry.job_result("media_warmer", true, telemetry_ms, nil)
         cursor = next_cursor or cursor
         copas.sleep(WARM_BUSY_PAUSE_SECONDS)
       elseif status == "launched" then
+        -- The one outcome worth a durable row: an actual transcode got
+        -- kicked off, distinguishing "warmer is idle" from "warmer is doing
+        -- real CPU/GPU work right now" on the admin panel.
+        M.telemetry.job_result("media_warmer", true, telemetry_ms, { event = "launched", cursor = next_cursor })
         cursor = next_cursor or cursor
         copas.sleep(WARM_LAUNCH_PAUSE_SECONDS)
       else -- "batch_done": nothing to launch in this batch, keep sweeping forward briskly
+        M.telemetry.job_result("media_warmer", true, telemetry_ms, nil)
         cursor = next_cursor or cursor
         copas.sleep(WARM_SCAN_PAUSE_SECONDS)
       end
@@ -8771,11 +8866,17 @@ function M.start_stale_transcode_cleanup()
 
   copas.addthread(function()
     while true do
+      local telemetry_t0 = M.telemetry.now()
       local ok, removed_or_err, freed = pcall(sweep_once)
+      local telemetry_ms = M.telemetry.ms_since(telemetry_t0)
       if not ok then
         print("[nyxframe] stale transcode cleanup error: " .. tostring(removed_or_err))
+        M.telemetry.job_result("stale_transcode_cleanup", false, telemetry_ms, { error = tostring(removed_or_err):sub(1, 300) })
       elseif removed_or_err and removed_or_err > 0 then
         print(string.format("[nyxframe] stale transcode cleanup: removed %d item(s), freed %d bytes", removed_or_err, freed or 0))
+        M.telemetry.job_result("stale_transcode_cleanup", true, telemetry_ms, { removed = removed_or_err, freed_bytes = freed or 0 })
+      else
+        M.telemetry.job_result("stale_transcode_cleanup", true, telemetry_ms, nil)
       end
       copas.sleep(SWEEP_INTERVAL_SECONDS)
     end
@@ -8946,11 +9047,17 @@ function M.start_hls_idle_reaper()
 
   copas.addthread(function()
     while true do
+      local telemetry_t0 = M.telemetry.now()
       local ok, reaped_or_err = pcall(reap_once)
+      local telemetry_ms = M.telemetry.ms_since(telemetry_t0)
       if not ok then
         print("[nyxframe] hls idle reaper error: " .. tostring(reaped_or_err))
+        M.telemetry.job_result("hls_idle_reaper", false, telemetry_ms, { error = tostring(reaped_or_err):sub(1, 300) })
       elseif reaped_or_err and reaped_or_err > 0 then
         print(string.format("[nyxframe] hls idle reaper: stopped %d abandoned transcode(s)", reaped_or_err))
+        M.telemetry.job_result("hls_idle_reaper", true, telemetry_ms, { reaped = reaped_or_err })
+      else
+        M.telemetry.job_result("hls_idle_reaper", true, telemetry_ms, nil)
       end
       copas.sleep(SWEEP_INTERVAL_SECONDS)
     end
@@ -9835,6 +9942,31 @@ end
 
 function M.download_nyxframe(req)
   return download_latest_ipa(req, "HeavenlyXenusVR/Nyxframe", "nyxframe", "Nyxframe")
+end
+
+-- ---------------------------------------------------------------------------
+-- Telemetry / Ops admin panel (see telemetry.lua for the in-memory request/
+-- job stats and the durable telemetry_events table this also reads from).
+-- Deliberately does NOT call admin_storage/walk_cache_dir here (that shells
+-- out to `find` per cache directory -- see that function's own header
+-- comment) or referenced_media_ids' full-table id scan; this panel is meant
+-- to be loaded often (site-owner glancing at ops health), not just when
+-- someone is specifically investigating storage.
+function M.admin_telemetry(req)
+  local owner, status, body = require_site_owner(req)
+  if not owner then return status, body end
+  local q = req.query or {}
+  local snapshot = M.telemetry.snapshot()
+  local recent, err = M.telemetry.recent_events(nn(q.event_type), q.limit)
+  return 200, {
+    request_stats = arr(snapshot.request_stats),
+    request_stats_since = snapshot.request_stats_since,
+    jobs = snapshot.jobs,
+    counters = snapshot.counters,
+    transcode_active_slots = count_active_transcode_slots(),
+    transcode_max_concurrent = transcode.max_concurrent,
+    recent_events = arr(recent),
+  }
 end
 
 return M

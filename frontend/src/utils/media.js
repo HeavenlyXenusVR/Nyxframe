@@ -6,6 +6,7 @@ let activePreloads = 0;
 const MAX_PRELOADS = 2;
 const MAX_SEEN_PRELOADS = 700;
 const reportedMediaDiagnostics = new Set();
+const MAX_SEEN_DIAGNOSTICS = 800;
 
 export function isPerfLiteRuntime() {
   if (typeof document === "undefined") return false;
@@ -143,7 +144,15 @@ export function reportMediaLoadDiagnostic({
   ].join("|");
   if (reportedMediaDiagnostics.has(signature)) return;
   reportedMediaDiagnostics.add(signature);
-  if (reportedMediaDiagnostics.size > 800) reportedMediaDiagnostics.clear();
+  // Evict the single oldest entry (Set iteration order = insertion order)
+  // instead of clearing the whole set -- a wholesale clear meant every
+  // already-reported media on the page would re-fire its diagnostic beacon
+  // the instant the cap was hit, in a burst, rather than just the normal
+  // one-eviction-per-new-entry steady state this keeps instead.
+  if (reportedMediaDiagnostics.size > MAX_SEEN_DIAGNOSTICS) {
+    const oldest = reportedMediaDiagnostics.values().next().value;
+    if (oldest !== undefined) reportedMediaDiagnostics.delete(oldest);
+  }
   postClientDiagnostic(`/api/media/${normalizedMediaId}/diagnostics/load`, {
     context,
     outcome,
@@ -151,6 +160,33 @@ export function reportMediaLoadDiagnostic({
     selected_source: chosenSource,
     failed_sources: failedSources,
     source_count: labels.length,
+  });
+}
+
+// Video/HLS playback telemetry -- companion to reportMediaLoadDiagnostic
+// above, for the richer set of events only a <video>/hls.js instance can
+// observe. No dedup needed (unlike the load diagnostic's signature-based
+// one): callers fire this at most once per playback session, on teardown.
+export function reportMediaPlaybackDiagnostic({
+  mediaId,
+  outcome = "",
+  quality = "",
+  timeToFirstFrameMs = null,
+  stallCount = 0,
+  stallTotalMs = 0,
+  qualityDowngradeCount = 0,
+  usingHlsJs = false,
+}) {
+  const normalizedMediaId = Number(mediaId || 0);
+  if (!normalizedMediaId || !outcome) return;
+  postClientDiagnostic(`/api/media/${normalizedMediaId}/diagnostics/playback`, {
+    outcome,
+    quality,
+    time_to_first_frame_ms: timeToFirstFrameMs,
+    stall_count: stallCount,
+    stall_total_ms: stallTotalMs,
+    quality_downgrade_count: qualityDowngradeCount,
+    using_hls_js: usingHlsJs,
   });
 }
 

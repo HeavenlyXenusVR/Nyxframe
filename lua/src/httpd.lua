@@ -47,6 +47,13 @@ M.trusted_proxy_cidrs = {}
 -- when no registered route matches. Returning nil keeps the normal JSON 404
 -- (see static.lua's SPA fallback, the only current user of this hook).
 M.fallback_handler = nil
+-- Optional hook(method, route_pattern_or_path, status, duration_ms), called
+-- once per request right alongside access_log_line below. Set by main.lua to
+-- telemetry.record_request -- kept as a plain settable field (not a
+-- `require("telemetry")` in this file) so httpd.lua stays decoupled from the
+-- telemetry/db modules; a nil hook (telemetry disabled, or main.lua never
+-- set it) is just skipped.
+M.on_request = nil
 
 local function split_path_pattern(pattern)
   local keys = {}
@@ -77,6 +84,10 @@ local function match_ws_route(path)
   return nil
 end
 
+-- Third return value is the registered pattern string itself (e.g.
+-- "/api/media/:media_id"), not the raw path -- M.on_request below buckets
+-- telemetry by this so a distinct media_id/job_id per request doesn't blow
+-- up the bucket count.
 local function match_route(method, path)
   for _, r in ipairs(M.routes) do
     if r.method == method then
@@ -85,10 +96,10 @@ local function match_route(method, path)
         if caps[1] ~= nil then
           local params = {}
           for i, k in ipairs(r.keys) do params[k] = caps[i] end
-          return r.handler, params
+          return r.handler, params, r.pattern
         end
       elseif path:match(r.regex) then
-        return r.handler, {}
+        return r.handler, {}, r.pattern
       end
     end
   end
@@ -372,6 +383,7 @@ local function handle_connection(sock)
   -- (with whatever's known so far) even for a request that fails before a
   -- route was ever matched -- e.g. a malformed request line.
   local log_method, log_path, log_status, log_ip, log_ua = nil, nil, nil, nil, nil
+  local log_route_pattern = nil
 
   -- Every response in this function should go through this instead of
   -- calling send_response directly, purely so log_status always reflects
@@ -443,7 +455,8 @@ local function handle_connection(sock)
       return
     end
 
-    local handler, params = match_route(method, path)
+    local handler, params, route_pattern = match_route(method, path)
+    log_route_pattern = route_pattern
     if not handler then
       if M.fallback_handler then
         local fb_status, fb_body, fb_headers = M.fallback_handler(method, path, headers)
@@ -518,7 +531,16 @@ local function handle_connection(sock)
     -- log_method is only nil for a connection that closed before sending
     -- any request line at all (e.g. a TCP health-check probe) -- nothing
     -- meaningful to log for those.
-    access_log_line(log_method, log_path, log_status, (socket.gettime() - start_time) * 1000, log_ip, log_ua)
+    local duration_ms = (socket.gettime() - start_time) * 1000
+    access_log_line(log_method, log_path, log_status, duration_ms, log_ip, log_ua)
+    if M.on_request then
+      -- log_route_pattern is nil for a 404/OPTIONS/websocket-upgrade path (no
+      -- registered :param route matched) or a request that failed before
+      -- routing ran at all -- the raw path is still a reasonable bucket key
+      -- for those (a malformed/unmatched path has no :id segments to blow up
+      -- cardinality with).
+      pcall(M.on_request, log_method, log_route_pattern or log_path, log_status, duration_ms)
+    end
     io.stdout:flush()
   end
   pcall(function() sock:close() end)

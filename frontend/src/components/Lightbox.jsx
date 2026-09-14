@@ -132,6 +132,7 @@ export function Lightbox({ ctx }) {
               onQualityChange={setVideoQuality}
               qualityOptions={[["original", "Original"], ["1080p", "1080p HD"], ["720p", "720p"], ["480p", "480p"]]}
               title={item.title}
+              mediaId={item.id}
             />
           ) : (
             <ResilientImage
