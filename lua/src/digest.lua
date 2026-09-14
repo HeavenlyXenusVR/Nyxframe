@@ -37,10 +37,19 @@ local function week_start_utc(t)
 end
 
 local function creators_with_webhook()
+  -- BUGFIX 2026-09-14: user_settings is a plain TEXT column (see
+  -- users' chk_users_settings_json CHECK constraint -- validated as
+  -- parseable JSON at write time, but never actually stored as json/jsonb),
+  -- confirmed live via "operator does not exist: text ->> unknown" on
+  -- every single digest_loop wakeup since this file was written -- this
+  -- query has never once successfully found a creator to digest. Needs the
+  -- same explicit ::jsonb cast routes.lua's own user_settings->> reads
+  -- already use (e.g. the profile_show_follow_counts/profile_show_joined_date
+  -- lookups) -- ->> only exists for json/jsonb, not text.
   local rows, err = db.fetchall([[
     SELECT id, user_settings FROM users
-    WHERE user_settings->>'discord_webhook_url' IS NOT NULL
-      AND user_settings->>'discord_webhook_url' != ''
+    WHERE user_settings::jsonb->>'discord_webhook_url' IS NOT NULL
+      AND user_settings::jsonb->>'discord_webhook_url' != ''
   ]])
   if err then
     print("[nyxframe] digest: failed to list creators: " .. tostring(err))
