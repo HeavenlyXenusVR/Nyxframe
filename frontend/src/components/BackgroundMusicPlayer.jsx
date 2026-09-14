@@ -70,6 +70,13 @@ export function BackgroundMusicPlayer() {
     return () => { cancelled = true; };
   }, []);
 
+  // Always points at the current render's playNext -- the one-time
+  // interaction-listener effect below is registered on mount (empty deps,
+  // so it never re-subscribes) and needs to call whatever playNext is
+  // CURRENT at the moment a visitor actually interacts, not the one from
+  // mount time closing over the still-empty initial `tracks` state.
+  const playNextRef = useRef(() => {});
+
   function playNext() {
     const audio = audioRef.current;
     if (!audio) return;
@@ -79,6 +86,7 @@ export function BackgroundMusicPlayer() {
     audio.src = next.url;
     audio.play().catch(() => {});
   }
+  playNextRef.current = playNext;
 
   // Starts the instant tracks are known -- muted, which every browser
   // allows regardless of interaction (see the top-of-file doc comment).
@@ -104,15 +112,36 @@ export function BackgroundMusicPlayer() {
   // Separate from the effect above because interaction can happen before
   // OR after tracks finish loading -- either order has to end in "audible
   // once both have happened, unless the visitor has explicitly muted it."
+  //
+  // BUGFIX 2026-09-14: this used to only flip `audio.muted = false`, on
+  // the assumption that the tracks-loaded effect's initial muted
+  // `audio.play()` call had already succeeded (every browser is supposed
+  // to allow muted autoplay unconditionally) and was just sitting there
+  // silently. Confirmed live that assumption doesn't always hold -- that
+  // play() call can still reject with NotAllowedError ("user didn't
+  // interact with the document first") even muted, depending on the
+  // browser/context. Nothing ever retried it afterward: onEnded can't
+  // fire for audio that never started, so a rejected initial attempt left
+  // the element permanently paused at currentTime 0 with no audio ever
+  // audible, no matter how many times a visitor clicked around -- exactly
+  // "loads tracks but never actually plays". Retrying play() here
+  // unconditionally (a real user gesture has definitely happened by this
+  // point) fixes both that case and is a harmless no-op if it was already
+  // playing. Mirrors toggleMuted's own "turn it back on" logic below.
   useEffect(() => {
     const onInteract = () => {
       interactedRef.current = true;
       const audio = audioRef.current;
-      if (audio && !mutedRef.current) audio.muted = false;
+      if (!audio || mutedRef.current) return;
+      audio.muted = false;
+      if (audio.paused) {
+        if (!audio.src) playNextRef.current(); else audio.play().catch(() => {});
+      }
     };
     const events = ["pointerdown", "keydown", "touchstart"];
     events.forEach((event) => window.addEventListener(event, onInteract, { once: true, passive: true }));
     return () => events.forEach((event) => window.removeEventListener(event, onInteract));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Ducking: fades toward the target volume over FADE_MS instead of
