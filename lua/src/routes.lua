@@ -3241,11 +3241,29 @@ function M.upload_chunk_init(req)
     return 500, { detail = "Could not persist upload session: " .. tostring(save_err) }
   end
 
-  -- 20MB keeps every individual request comfortably under the ~100MB
-  -- Cloudflare edge ceiling even accounting for retries/overhead; it's a
-  -- suggestion the client is free to ignore (chunks are appended in order
-  -- by index regardless of size), not an enforced contract.
-  return 200, { session_id = session_id, chunk_size = 20 * 1024 * 1024 }
+  -- BUGFIX 2026-09-14: was 20MB, sized only against the ~100MB Cloudflare
+  -- edge BODY-SIZE ceiling -- a completely separate constraint from the
+  -- one that actually bit this, confirmed live via the new iOS background
+  -- upload path (BackgroundUploadManager): Cloudflare's edge also enforces
+  -- its own ~120s read timeout waiting for the origin to receive+respond
+  -- to a request, independent of body size. A 20MB chunk over a
+  -- *throttled* connection -- exactly what iOS deliberately does to
+  -- background network traffic, and the whole reason a background
+  -- transfer can take meaningfully longer than the same transfer in the
+  -- foreground -- can take well over 120s to arrive, so Cloudflare's edge
+  -- gives up and returns ITS OWN timeout error to the client while this
+  -- backend is still mid-`copas.receive` for the same request; by the time
+  -- this backend finally finishes reading whatever the now-abandoned
+  -- connection actually delivered (confirmed live: ~125s later) and
+  -- responds 400 "Empty chunk"/"Upload is empty", the client is long gone
+  -- and never sees it. 4MB keeps a single chunk's transfer time an order
+  -- of magnitude under that 120s ceiling even under heavy throttling, at
+  -- the cost of more round trips for a given file -- still a suggestion
+  -- the client is free to ignore (chunks are appended in order by index
+  -- regardless of size), not an enforced contract, and applies to both
+  -- clients automatically since both read this value rather than
+  -- hardcoding their own.
+  return 200, { session_id = session_id, chunk_size = 4 * 1024 * 1024 }
 end
 
 function M.upload_chunk_append(req)
