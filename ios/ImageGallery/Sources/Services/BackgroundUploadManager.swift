@@ -95,32 +95,45 @@ final class BackgroundUploadManager: NSObject, ObservableObject {
     /// be a file on disk (not in-memory `Data`) -- `UploadViewModel` writes
     /// a picked image to a temp file before calling this, same as it
     /// already did for a picked video.
+    ///
+    /// BUGFIX (confirmed live, 2026-09-14): the copy of `sourceURL` into
+    /// this manager's own storage used to happen inside a `Task.detached`,
+    /// racing `UploadView`'s button action, which calls
+    /// `viewModel.reset()` (deleting the picked file) immediately after
+    /// this returns. When the detached copy lost that race, the source was
+    /// already gone by the time it ran -- `copyItem` against a missing
+    /// file just silently produced nothing usable, and the resulting
+    /// multipart body went out with an empty file field. Confirmed live:
+    /// two uploads both 400'd with "Upload is empty" after the background
+    /// transfer actually completed (~125s each). Copying synchronously
+    /// here, on the caller's thread, before returning, closes the window
+    /// completely -- by the time `enqueue` returns, the source is safely
+    /// duplicated and the caller is free to delete its own copy.
     @discardableResult
     func enqueue(sourceURL: URL, filename: String, mimeType: String, fields: GalleryAPIClient.UploadFields) -> String {
         let id = UUID().uuidString
         progress[id] = 0
+        do {
+            try fileManager.createDirectory(at: uploadDirectory(id), withIntermediateDirectories: true)
+            try fileManager.copyItem(at: sourceURL, to: sourcePath(id))
+        } catch {
+            DiagnosticsReporter.reportUpload(outcome: "error", method: "unknown", durationMs: 0, bytes: 0, errorMessage: "Could not prepare upload: \(error.localizedDescription)")
+            progress[id] = nil
+            completionNotice = "Could not start the upload: \(error.localizedDescription)"
+            return id
+        }
         Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
-            do {
-                try self.fileManager.createDirectory(at: self.uploadDirectory(id), withIntermediateDirectories: true)
-                try self.fileManager.copyItem(at: sourceURL, to: self.sourcePath(id))
-                let totalSize = (try? self.fileManager.attributesOfItem(atPath: self.sourcePath(id).path)[.size] as? Int) ?? nil ?? 0
-                let formFields = GalleryAPIClient.shared.uploadForm(fields)
-                let fieldsJSON = (try? JSONEncoder().encode(formFields)) ?? Data()
-                let phase: ManagedUpload.Phase = totalSize > Self.chunkedThresholdBytes ? .initializingChunked : .sendingSmall
-                let upload = ManagedUpload(
-                    id: id, filename: filename, mimeType: mimeType, fieldsJSON: fieldsJSON, totalSize: totalSize,
-                    phase: phase, enqueuedAt: Date()
-                )
-                self.saveState(upload)
-                await self.advance(id: id)
-            } catch {
-                DiagnosticsReporter.reportUpload(outcome: "error", method: "unknown", durationMs: 0, bytes: 0, errorMessage: "Could not prepare upload: \(error.localizedDescription)")
-                DispatchQueue.main.async { [weak self] in
-                    self?.progress[id] = nil
-                    self?.completionNotice = "Could not start the upload: \(error.localizedDescription)"
-                }
-            }
+            let totalSize = (try? self.fileManager.attributesOfItem(atPath: self.sourcePath(id).path)[.size] as? Int) ?? nil ?? 0
+            let formFields = GalleryAPIClient.shared.uploadForm(fields)
+            let fieldsJSON = (try? JSONEncoder().encode(formFields)) ?? Data()
+            let phase: ManagedUpload.Phase = totalSize > Self.chunkedThresholdBytes ? .initializingChunked : .sendingSmall
+            let upload = ManagedUpload(
+                id: id, filename: filename, mimeType: mimeType, fieldsJSON: fieldsJSON, totalSize: totalSize,
+                phase: phase, enqueuedAt: Date()
+            )
+            self.saveState(upload)
+            await self.advance(id: id)
         }
         return id
     }
@@ -325,6 +338,17 @@ final class BackgroundUploadManager: NSObject, ObservableObject {
     /// `httpd.lua` multipart parser doesn't care which client built it, but
     /// keeping the shape identical is one less thing to get wrong.
     private func composeSmallMultipartBody(upload: ManagedUpload, boundary: String) throws -> URL {
+        // Defense in depth: a zero-byte (or missing) source here means
+        // something upstream is broken -- fail loudly and let markFailed's
+        // retry/give-up path handle it, instead of silently building and
+        // sending a structurally-valid-but-empty multipart body the way
+        // this did before `enqueue`'s copy race was fixed (confirmed live:
+        // that produced a real "Upload is empty" 400 after a full
+        // background transfer, not an immediate local failure).
+        let sourceSize = (try? fileManager.attributesOfItem(atPath: sourcePath(upload.id).path)[.size] as? Int) ?? nil ?? 0
+        guard sourceSize > 0 else {
+            throw GalleryAPIError.http(status: 0, message: "The file to upload is missing or empty.")
+        }
         let fields = (try? JSONDecoder().decode([String: String].self, from: upload.fieldsJSON)) ?? [:]
         let bodyURL = smallBodyPath(upload.id)
         fileManager.createFile(atPath: bodyURL.path, contents: nil)
