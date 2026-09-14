@@ -15,6 +15,7 @@ final class VideoPlayerController: ObservableObject {
 
     private var statusObservation: NSKeyValueObservation?
     private var rateObservation: NSKeyValueObservation?
+    private var likelyToKeepUpObservation: NSKeyValueObservation?
     private var retryAttempt = 0
     private static let maxRetries = 2
     private var preflightTask: Task<Void, Never>?
@@ -22,9 +23,25 @@ final class VideoPlayerController: ObservableObject {
     /// Set (and playback restarted) whenever the quality selector picks a
     /// different rendition -- the URL, not the player, is the source of truth.
     private(set) var url: URL
+    private let mediaId: Int
 
-    init(url: URL) {
+    // ─── Playback telemetry (reportMediaPlayback on deinit) ─────────────────
+    // Mirrors VideoPlayer.jsx's playbackStatsRef -- accumulated for this
+    // controller's whole lifetime (a quality switch via setURL keeps adding
+    // to the same session rather than resetting it), fired once when this
+    // controller is torn down (navigating away/closing the detail view),
+    // same "component teardown = session end" moment web uses.
+    private var loadStartedAt: CFAbsoluteTime?
+    private var firstFrameMs: Int?
+    private var stallCount = 0
+    private var stallStartedAt: CFAbsoluteTime?
+    private var stallTotalMs = 0
+    private var hasPlayedOnce = false
+    private var stallObserver: NSObjectProtocol?
+
+    init(url: URL, mediaId: Int) {
         self.url = url
+        self.mediaId = mediaId
     }
 
     func setURL(_ newURL: URL) {
@@ -55,7 +72,14 @@ final class VideoPlayerController: ObservableObject {
     private func startPlayback(autoplay: Bool) {
         statusObservation?.invalidate()
         rateObservation?.invalidate()
+        likelyToKeepUpObservation?.invalidate()
+        if let stallObserver { NotificationCenter.default.removeObserver(stallObserver) }
         preflightTask?.cancel()
+        // Time-to-first-frame only means something for the very first load
+        // of a playback session -- setURL's own quality-switch path (see
+        // its doc comment) restarts playback too, but that's a rendition
+        // change mid-session, not a fresh "how long until video appears".
+        if loadStartedAt == nil { loadStartedAt = CFAbsoluteTimeGetCurrent() }
         var headers: [String: String] = [:]
         if let token = GalleryAPIClient.shared.authToken {
             headers["Authorization"] = "Bearer \(token)"
@@ -161,8 +185,42 @@ final class VideoPlayerController: ObservableObject {
         // volume -- rate (not play()/pause() call sites) so this also
         // catches play/pause triggered by AVKit's native transport controls,
         // not just our own startPlayback()/pause() methods.
-        rateObservation = newPlayer.observe(\.rate, options: [.new]) { player, _ in
+        rateObservation = newPlayer.observe(\.rate, options: [.new]) { [weak self] player, _ in
             NotificationCenter.default.post(name: .nyxframeVideoPlaybackChanged, object: nil, userInfo: ["playing": player.rate > 0])
+            guard player.rate > 0, let self else { return }
+            DispatchQueue.main.async {
+                guard !self.hasPlayedOnce else { return }
+                self.hasPlayedOnce = true
+                if self.firstFrameMs == nil, let startedAt = self.loadStartedAt {
+                    self.firstFrameMs = Int((CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
+                }
+            }
+        }
+        // isPlaybackLikelyToKeepUp flips false->true exactly at the point
+        // playback resumes smoothly after a rebuffer -- paired with the
+        // .AVPlayerItemPlaybackStalled notification (which fires at the
+        // START of a stall) to get both a count and a total duration,
+        // mirroring VideoPlayer.jsx's onWaiting/onCanPlay stall tracking.
+        likelyToKeepUpObservation = item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] observedItem, _ in
+            guard observedItem.isPlaybackLikelyToKeepUp else { return }
+            DispatchQueue.main.async {
+                guard let self, let startedAt = self.stallStartedAt else { return }
+                self.stallTotalMs += Int((CFAbsoluteTimeGetCurrent() - startedAt) * 1000)
+                self.stallStartedAt = nil
+            }
+        }
+        stallObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemPlaybackStalled, object: item, queue: .main
+        ) { [weak self] _ in
+            // `queue: .main` only guarantees which thread this runs on, not
+            // MainActor isolation as the compiler sees it (this closure's
+            // parameter type is `@Sendable`) -- hop explicitly, same as
+            // every other cross-actor callback in this file.
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.stallCount += 1
+                if self.stallStartedAt == nil { self.stallStartedAt = CFAbsoluteTimeGetCurrent() }
+            }
         }
         player = newPlayer
         if autoplay { newPlayer.play() }
@@ -203,6 +261,8 @@ final class VideoPlayerController: ObservableObject {
     deinit {
         statusObservation?.invalidate()
         rateObservation?.invalidate()
+        likelyToKeepUpObservation?.invalidate()
+        if let stallObserver { NotificationCenter.default.removeObserver(stallObserver) }
         preflightTask?.cancel()
         // Unconditional, not conditioned on prior playback state -- mirrors
         // web's identical unmount-safety comment on VideoPlayer.jsx: this
@@ -211,5 +271,16 @@ final class VideoPlayerController: ObservableObject {
         // matching "stopped" rate change ever coming. A redundant post when
         // nothing was playing is a harmless no-op fade to the same volume.
         NotificationCenter.default.post(name: .nyxframeVideoPlaybackChanged, object: nil, userInfo: ["playing": false])
+
+        // Playback telemetry -- fired once here (controller teardown = the
+        // end of this playback session), same moment VideoPlayer.jsx's own
+        // unmount cleanup reports its accumulated stats.
+        guard loadStartedAt != nil else { return }
+        DiagnosticsReporter.reportMediaPlayback(
+            mediaId: mediaId,
+            outcome: errorMessage != nil ? "error" : hasPlayedOnce ? "played" : "abandoned",
+            quality: nil, timeToFirstFrameMs: firstFrameMs,
+            stallCount: stallCount, stallTotalMs: stallTotalMs, retryCount: retryAttempt
+        )
     }
 }

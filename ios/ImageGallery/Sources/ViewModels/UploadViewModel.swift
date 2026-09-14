@@ -1,3 +1,4 @@
+import Combine
 import CoreTransferable
 import Foundation
 import PhotosUI
@@ -50,16 +51,23 @@ final class UploadViewModel: ObservableObject {
     @Published var publishAt = Date().addingTimeInterval(3600)
 
     @Published var categories: [CategorySummary] = []
+    /// True only while `submit()` is validating/enqueueing -- the actual
+    /// transfer runs in `BackgroundUploadManager` independent of this view
+    /// model's lifetime, so this flips back to `false` as soon as the
+    /// upload has been handed off, not when it finishes. See `submit()`'s
+    /// doc comment for why that's the whole point of this rewrite.
     @Published var isUploading = false
-    /// Only meaningfully updated for chunked (large-video) uploads -- see
-    /// `submit()`. Stays 0 for the ordinary single-request path.
+    /// Live progress of the upload this view model most recently enqueued,
+    /// for as long as this screen happens to stay open -- sourced from
+    /// `BackgroundUploadManager.shared.progress`, which keeps updating
+    /// whether or not anything is still observing it.
     @Published var uploadProgress: Double = 0
     @Published var errorMessage: String?
-    @Published var uploadedMedia: MediaItem?
     @Published var possibleDuplicates: [DuplicateMatch] = []
     @Published var isAnalyzing = false
 
     private let api = GalleryAPIClient.shared
+    private var progressCancellable: AnyCancellable?
 
     /// No independent client-side cap -- this just mirrors whatever the
     /// backend is actually configured to accept (`ServerConfig`, fetched from
@@ -72,13 +80,13 @@ final class UploadViewModel: ObservableObject {
 
     /// This deployment's Cloudflare tunnel hard-413s any single request body
     /// over ~100MB regardless of the server's own configured upload limit
-    /// (see `GalleryAPIClient+Endpoints.swift`'s `uploadMediaChunked` doc
-    /// comment -- confirmed live). Comfortably under that. Videos already
-    /// routed through the chunked path above this threshold in `submit()`;
-    /// picked IMAGE `Data` never did (always a single one-shot request
-    /// regardless of size), so a large enough picked image 413'd both on
-    /// `analyze()` and on the real publish -- reported live from a large
-    /// wallpaper image that failed to even analyze.
+    /// (confirmed live). Comfortably under that -- used here only to decide
+    /// whether `analyze()`'s standalone preview call (below, always a
+    /// single one-shot request, no chunked variant) is even worth
+    /// attempting for a given file. `submit()` no longer needs this
+    /// threshold itself: `BackgroundUploadManager` (see its own
+    /// `chunkedThresholdBytes`) now decides direct-vs-chunked for the real
+    /// upload.
     private static let chunkedUploadThresholdBytes = 60 * 1024 * 1024
 
     func loadCategories() async {
@@ -183,15 +191,25 @@ final class UploadViewModel: ObservableObject {
         }
     }
 
-    func submit() async -> Bool {
+    /// Validates the form, hands the picked file off to
+    /// `BackgroundUploadManager` for the actual transfer, and returns right
+    /// away -- this no longer awaits the upload finishing (see
+    /// `BackgroundUploadManager`'s header comment for why: the whole point
+    /// is that a transfer survives the app being backgrounded or killed,
+    /// which rules out resuming an in-memory awaited continuation for the
+    /// "it finished" signal). `true` means "successfully queued for
+    /// background transfer", not "upload complete" -- the real outcome
+    /// surfaces later via `BackgroundUploadManager.shared.completionNotice`
+    /// (see `ImageGalleryApp.swift`'s alert), same as web's `UploadPage.jsx`
+    /// showing "queued" and moving on rather than blocking on the transfer.
+    /// The caller (`UploadView`) is free to dismiss/navigate the instant
+    /// this returns `true`.
+    func submit() -> Bool {
         guard pickedData != nil || pickedFileURL != nil else {
             errorMessage = "Choose a photo or video first."
             return false
         }
-        isUploading = true
-        uploadProgress = 0
         errorMessage = nil
-        defer { isUploading = false }
 
         var publishAtString: String?
         if scheduleEnabled {
@@ -213,51 +231,60 @@ final class UploadViewModel: ObservableObject {
             publishAt: publishAtString
         )
 
-        do {
-            let response: MediaUploadResponse
-            if let pickedFileURL {
-                let size = (try? FileManager.default.attributesOfItem(atPath: pickedFileURL.path)[.size] as? Int) ?? nil
-                if let size, size > Self.chunkedUploadThresholdBytes {
-                    response = try await api.uploadMediaChunked(fileURL: pickedFileURL, fileName: pickedFileName, fields: fields) { [weak self] progress in
-                        Task { @MainActor in self?.uploadProgress = progress }
-                    }
-                } else {
-                    response = try await api.uploadMedia(fileURL: pickedFileURL, fileName: pickedFileName, mimeType: pickedMimeType, fields: fields)
-                }
-            } else if let pickedData {
-                if pickedData.count > Self.chunkedUploadThresholdBytes {
-                    // Picked images were never given the chunked treatment
-                    // videos get above -- always a single multipart request
-                    // regardless of size, which 413'd for a large enough
-                    // image. uploadMediaChunked only takes a file URL (it
-                    // streams from disk), so stage the in-memory Data to a
-                    // temp file and reuse it exactly as the video path does.
-                    let tempURL = FileManager.default.temporaryDirectory
-                        .appendingPathComponent("upload-\(UUID().uuidString)-\(pickedFileName)")
-                    try pickedData.write(to: tempURL)
-                    defer { try? FileManager.default.removeItem(at: tempURL) }
-                    response = try await api.uploadMediaChunked(fileURL: tempURL, fileName: pickedFileName, fields: fields) { [weak self] progress in
-                        Task { @MainActor in self?.uploadProgress = progress }
-                    }
-                } else {
-                    response = try await api.uploadMedia(data: pickedData, fileName: pickedFileName, mimeType: pickedMimeType, fields: fields)
-                }
-            } else {
+        let sourceURL: URL
+        if let pickedFileURL {
+            sourceURL = pickedFileURL
+        } else if let pickedData {
+            // BackgroundUploadManager always transfers from a file on disk
+            // -- background URLSession upload tasks require a file-backed
+            // body regardless of size. A picked image previously only got
+            // written to disk above the old chunked threshold; now it
+            // always does, matching how a picked video already worked.
+            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent("upload-\(UUID().uuidString)-\(pickedFileName)")
+            do {
+                try pickedData.write(to: tempURL)
+            } catch {
+                errorMessage = "Could not prepare the upload: \(error.localizedDescription)"
                 return false
             }
-            uploadedMedia = response.media
-            possibleDuplicates = response.possibleDuplicates ?? []
-            // myMedia() is now cached (see GalleryAPIClient+Endpoints.swift) --
-            // without this, "my uploads"/Studio could sit missing this post
-            // for up to that cache's TTL right after a successful upload.
-            await APIResponseCache.shared.invalidate(pathPrefix: "/api/me/media")
-            Haptics.success()
-            return true
-        } catch {
-            if !error.isCancellation { errorMessage = error.localizedDescription }
-            Haptics.error()
+            sourceURL = tempURL
+        } else {
             return false
         }
+
+        isUploading = true
+        uploadProgress = 0
+        let id = BackgroundUploadManager.shared.enqueue(sourceURL: sourceURL, filename: pickedFileName, mimeType: pickedMimeType, fields: fields)
+        observeProgress(id: id)
+        // myMedia() is cached (see GalleryAPIClient+Endpoints.swift) -- this
+        // upload won't be visible server-side for a while yet (still
+        // transferring, and possibly still a background finish job after
+        // that), but invalidating now means the list is already fresh by
+        // the time it does land instead of sitting stale for the rest of
+        // the cache's TTL.
+        Task { await APIResponseCache.shared.invalidate(pathPrefix: "/api/me/media") }
+        Haptics.light()
+        return true
+    }
+
+    /// Mirrors this upload's live progress (and, once it's gone from the
+    /// dict, its completion) for as long as this view model stays alive --
+    /// `BackgroundUploadManager` itself doesn't need or wait for an
+    /// observer; this purely feeds the on-screen progress bar while the
+    /// user happens to still be looking at it.
+    private func observeProgress(id: String) {
+        progressCancellable = BackgroundUploadManager.shared.$progress
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] progressById in
+                guard let self else { return }
+                if let value = progressById[id] {
+                    self.uploadProgress = value
+                    self.isUploading = true
+                } else {
+                    self.isUploading = false
+                    self.progressCancellable = nil
+                }
+            }
     }
 
     /// Removes any picked-video temp file so a "change file" tap or a reset
@@ -279,7 +306,6 @@ final class UploadViewModel: ObservableObject {
         tags = ""
         isAdult = false
         scheduleEnabled = false
-        uploadedMedia = nil
         possibleDuplicates = []
     }
 }

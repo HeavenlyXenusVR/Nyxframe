@@ -2,15 +2,15 @@ import Foundation
 
 /// Persists background-finish job pointers to `UserDefaults` -- mirrors
 /// web's `frontend/src/uploadJobs.js` (localStorage under
-/// `image_gallery_pending_upload_jobs`). Exists so an app killed while
-/// `GalleryAPIClient.uploadMediaChunked`'s `pollUploadJob` loop is still
-/// waiting on a large upload's background finish job doesn't lose track of
-/// it -- `UploadRecoveryService` checks this on next launch/foreground and
-/// resolves whatever's left behind. Entries are written right before
-/// polling starts and removed as soon as polling resolves in the normal
-/// (app-stays-open) case, so under normal operation this stays empty; a
-/// non-empty read here specifically means "the app didn't get to see how
-/// an upload turned out."
+/// `image_gallery_pending_upload_jobs`). `BackgroundUploadManager` calls
+/// `add` the moment a chunked upload's `/api/media/upload/finish` transfer
+/// succeeds and hands back a job id -- from that point, resolving it is
+/// entirely `UploadRecoveryService`'s job, checked on every launch/
+/// foreground transition (`ImageGalleryApp.swift`). A non-empty read here
+/// just means "there's a server-side finish job whose outcome hasn't been
+/// shown to the user yet" -- it says nothing about whether the underlying
+/// upload itself is still in flight (that's `BackgroundUploadManager`'s own
+/// state, tracked separately).
 enum PendingUploadJobStore {
     private static let defaultsKey = "pending_upload_jobs"
 

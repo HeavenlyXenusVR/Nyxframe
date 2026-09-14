@@ -8,6 +8,7 @@ struct ImageGalleryApp: App {
     @StateObject private var quickActionRouter = QuickActionRouter.shared
     @StateObject private var unreadCounts = UnreadCountsService()
     @StateObject private var uploadRecovery = UploadRecoveryService()
+    @StateObject private var backgroundUploads = BackgroundUploadManager.shared
 
     var body: some Scene {
         WindowGroup {
@@ -17,6 +18,7 @@ struct ImageGalleryApp: App {
                 .environmentObject(quickActionRouter)
                 .environmentObject(unreadCounts)
                 .environmentObject(uploadRecovery)
+                .environmentObject(backgroundUploads)
         }
     }
 }
@@ -28,6 +30,7 @@ struct RootView: View {
     @EnvironmentObject private var biometricLock: BiometricLockService
     @EnvironmentObject private var unreadCounts: UnreadCountsService
     @EnvironmentObject private var uploadRecovery: UploadRecoveryService
+    @EnvironmentObject private var backgroundUploads: BackgroundUploadManager
     @AppStorage("theme_mode") private var themeMode = "system"
     @Environment(\.scenePhase) private var scenePhase
 
@@ -79,6 +82,14 @@ struct RootView: View {
         .onChange(of: session.currentUser?.id) { _ in
             updatePolling()
         }
+        // A chunked upload's transfer finishing (BackgroundUploadManager
+        // hands off a job id to PendingUploadJobStore right as this fires)
+        // is exactly the moment worth checking uploadJobStatus promptly,
+        // rather than waiting for the next unrelated foreground transition
+        // below -- see UploadRecoveryService's doc comment.
+        .onChange(of: backgroundUploads.completionNotice) { _ in
+            Task { await uploadRecovery.checkPendingJobs() }
+        }
         .onChange(of: scenePhase) { newPhase in
             if newPhase == .active {
                 Task {
@@ -101,6 +112,23 @@ struct RootView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(uploadRecovery.recoveredMessage ?? "")
+        }
+        // Sibling to the alert above, not a merge into it: this one covers
+        // an upload's own transfer finishing/failing (BackgroundUploadManager),
+        // the other covers the separate server-side finish job resolving
+        // after the app was relaunched (UploadRecoveryService) -- see each
+        // service's header comment. A single upload can raise either, or
+        // neither, but never both for the same event.
+        .alert(
+            "Upload update",
+            isPresented: Binding(
+                get: { backgroundUploads.completionNotice != nil },
+                set: { isPresented in if !isPresented { backgroundUploads.completionNotice = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(backgroundUploads.completionNotice ?? "")
         }
     }
 

@@ -4,7 +4,7 @@ import UIKit
 
 struct UploadView: View {
     @StateObject private var viewModel = UploadViewModel()
-    @State private var showingSuccess = false
+    @State private var showingQueued = false
 
     // The backend (lua/src/config.lua's max_tags_per_upload/max_tag_length,
     // defaults 12/32) silently truncates instead of rejecting an
@@ -25,8 +25,13 @@ struct UploadView: View {
         viewModel.pickedData != nil || viewModel.pickedFileURL != nil
     }
 
+    // No longer gated on viewModel.isUploading -- that now tracks the most
+    // recently enqueued upload's own background transfer, which can (and
+    // should) keep running while the user picks and starts a completely
+    // different upload. Nothing about the new BackgroundUploadManager
+    // architecture requires serializing submissions on this screen.
     private var canSubmit: Bool {
-        hasPickedFile && !viewModel.title.isEmpty && !viewModel.isUploading
+        hasPickedFile && !viewModel.title.isEmpty
     }
 
     var body: some View {
@@ -131,27 +136,29 @@ struct UploadView: View {
             .padding()
             .animation(.easeOut(duration: 0.25), value: hasPickedFile)
         }
-        .disabled(viewModel.isUploading)
         .safeAreaInset(edge: .bottom) {
             publishBar
         }
         .navigationTitle("Upload")
         .task { await viewModel.loadCategories() }
-        .alert("Upload complete", isPresented: $showingSuccess) {
-            Button("OK") { viewModel.reset() }
+        // "Queued", not "complete" -- the transfer now runs in
+        // BackgroundUploadManager independent of this screen (see
+        // UploadViewModel.submit()'s doc comment), so this only confirms
+        // the handoff happened. The real outcome (finished/failed) arrives
+        // later as a separate notice -- see ImageGalleryApp.swift's alert
+        // bound to BackgroundUploadManager.shared.completionNotice.
+        .alert("Uploading in the background", isPresented: $showingQueued) {
+            Button("OK") {}
         } message: {
-            if !viewModel.possibleDuplicates.isEmpty {
-                Text("Heads up — this looked similar to \(viewModel.possibleDuplicates.count) post\(viewModel.possibleDuplicates.count == 1 ? "" : "s") already in your library.")
-            }
+            Text("You can leave this screen — we'll let you know when it's ready.")
         }
     }
 
     private var publishBar: some View {
         Button {
-            Task {
-                if await viewModel.submit() {
-                    showingSuccess = true
-                }
+            if viewModel.submit() {
+                showingQueued = true
+                viewModel.reset()
             }
         } label: {
             Group {

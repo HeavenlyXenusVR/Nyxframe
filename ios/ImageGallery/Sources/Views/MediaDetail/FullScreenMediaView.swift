@@ -29,7 +29,7 @@ struct FullScreenMediaView: View {
                 if media.isVideo, let videoController {
                     AuthenticatedVideoPlayer(controller: videoController)
                 } else if let urlString = media.url, let url = URL(string: urlString) {
-                    ZoomableAsyncImage(url: url)
+                    ZoomableAsyncImage(url: url, diagnostics: ImageLoadDiagnosticsContext(mediaId: media.id, mediaKind: media.mediaKind ?? "", context: "fullscreen"))
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

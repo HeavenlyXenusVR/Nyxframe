@@ -91,7 +91,12 @@ final class GalleryAPIClient {
     /// same as the web app's `_auth_optional`) — the token is attached whenever
     /// one exists either way, since sending it to a public/optional-auth
     /// endpoint is harmless and the backend ignores it if not applicable.
-    private func baseRequest(path: String, method: String, query: [String: String]?, requiresAuth: Bool) throws -> URLRequest {
+    ///
+    /// Internal, not private -- `BackgroundUploadManager` builds its own
+    /// upload/chunk/finish requests through this too, so its requests get
+    /// the exact same auth-header/URL-building behavior as everything else
+    /// instead of a second, possibly-drifting copy of that logic.
+    func baseRequest(path: String, method: String, query: [String: String]?, requiresAuth: Bool) throws -> URLRequest {
         var request = URLRequest(url: try makeURL(path: path, query: query))
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -140,7 +145,10 @@ final class GalleryAPIClient {
         }
     }
 
-    private func validate(_ response: URLResponse, data: Data) throws {
+    /// Internal, not private -- `BackgroundUploadManager` reuses this for
+    /// its own background-task responses instead of a second copy of the
+    /// same `{"detail": "..."}` error-body parsing.
+    func validate(_ response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else { return }
         guard !(200...299).contains(http.statusCode) else { return }
         let message = (try? decoder.decode(ErrorPayload.self, from: data))?.detailMessage
@@ -157,8 +165,9 @@ final class GalleryAPIClient {
     // an instant the network is genuinely unreachable just sitting forever
     // with isLoading stuck true and no error ever surfacing -- reported as
     // "nothing in profile loads at all". Deliberately NOT applied to
-    // upload/uploadChunkBytes, which need to tolerate multi-minute transfers
-    // by design.
+    // `upload`, which needs to tolerate multi-minute transfers by design
+    // (the large chunked-transfer path itself no longer runs through this
+    // client at all -- see `BackgroundUploadManager`).
     private static let requestTimeoutSeconds: TimeInterval = 25
 
     private func withRequestTimeout<T: Sendable>(_ operation: @escaping @Sendable () async throws -> T) async throws -> T {
@@ -349,27 +358,6 @@ final class GalleryAPIClient {
         try validate(response, data: data)
         do {
             return try decoder.decode(T.self, from: data)
-        } catch {
-            throw GalleryAPIError.decoding(String(describing: error))
-        }
-    }
-
-    /// Posts a single raw chunk (no multipart envelope) for the chunked
-    /// upload flow -- see `uploadMediaChunked` in +Endpoints.swift. Returns
-    /// the decoded JSON ack (`{"ok": true, "received_bytes": ...}`).
-    @discardableResult
-    func uploadChunkBytes<T: Decodable>(_ path: String, query: [String: String], data: Data) async throws -> T {
-        let (respData, response) = try await sendWithRetry(
-            buildRequest: {
-                var request = try baseRequest(path: path, method: "POST", query: query, requiresAuth: true)
-                request.setValue("application/octet-stream", forHTTPHeaderField: "Content-Type")
-                return request
-            },
-            perform: { request in try await self.session.upload(for: request, from: data) }
-        )
-        try validate(response, data: respData)
-        do {
-            return try decoder.decode(T.self, from: respData)
         } catch {
             throw GalleryAPIError.decoding(String(describing: error))
         }

@@ -1,15 +1,18 @@
 import Foundation
 
-/// Resolves upload finish jobs orphaned by the app being killed while
-/// `GalleryAPIClient.uploadMediaChunked` was still waiting on one (see
-/// `PendingUploadJobStore`'s doc comment). Checked from `RootView` at
-/// launch and on every return to foreground -- mirrors web's `Shell.jsx`
-/// polling the same job-status endpoint from its own persisted queue on an
-/// interval; this app only needs to check on activity transitions since
-/// the common case (app stays open) is already fully handled by
-/// `uploadMediaChunked`'s own in-process polling and never reaches here.
-/// Cheap no-op when `PendingUploadJobStore` is empty, which is true almost
-/// always.
+/// Resolves the server-side finish jobs `BackgroundUploadManager` hands off
+/// to `PendingUploadJobStore` once a chunked upload's transfer finishes
+/// (see that store's doc comment) -- this is the ONLY thing that ever polls
+/// `uploadJobStatus`; `BackgroundUploadManager` itself never does, it just
+/// records the job id and moves on. Checked from `RootView` at launch, on
+/// every return to foreground, AND right after
+/// `BackgroundUploadManager.shared.completionNotice` changes (a chunked
+/// upload's transfer finishing is exactly the moment a fresh job appears
+/// here worth checking promptly, rather than waiting for the next
+/// unrelated foreground transition) -- mirrors web's `Shell.jsx` polling
+/// the same job-status endpoint from its own persisted queue on an
+/// interval. Cheap no-op when `PendingUploadJobStore` is empty, which is
+/// true almost always.
 @MainActor
 final class UploadRecoveryService: ObservableObject {
     @Published var recoveredMessage: String?

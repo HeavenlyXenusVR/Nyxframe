@@ -5,6 +5,7 @@ import SwiftUI
 /// gestures the web app has no equivalent for.
 struct ZoomableAsyncImage: View {
     let url: URL
+    var diagnostics: ImageLoadDiagnosticsContext?
 
     @State private var scale: CGFloat = 1
     @State private var lastScale: CGFloat = 1
@@ -12,7 +13,7 @@ struct ZoomableAsyncImage: View {
     @State private var lastOffset: CGSize = .zero
 
     var body: some View {
-        CachedAsyncImage(url: url) { phase in
+        CachedAsyncImage(url: url, diagnostics: diagnostics) { phase in
             switch phase {
             case .success(let image):
                 image

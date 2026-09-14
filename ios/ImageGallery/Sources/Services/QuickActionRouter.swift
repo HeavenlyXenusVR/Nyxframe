@@ -48,11 +48,34 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         if let shortcutItem = launchOptions?[.shortcutItem] as? UIApplicationShortcutItem {
             Task { @MainActor in QuickActionRouter.shared.handle(shortcutType: shortcutItem.type) }
         }
+
+        // Touches BackgroundUploadManager.shared as early as possible on
+        // EVERY launch path (cold user launch, not just a background-event
+        // relaunch) -- its background URLSession has to exist with its
+        // delegate attached before iOS can replay any queued transfer
+        // events to this process. Without this, a launch specifically to
+        // deliver those events (see the method below) could race the first
+        // screen that happens to touch BackgroundUploadManager.shared.
+        _ = BackgroundUploadManager.shared
+
         return true
     }
 
     func application(_ application: UIApplication, performActionFor shortcutItem: UIApplicationShortcutItem, completionHandler: @escaping (Bool) -> Void) {
         Task { @MainActor in QuickActionRouter.shared.handle(shortcutType: shortcutItem.type) }
         completionHandler(true)
+    }
+
+    /// iOS relaunches (or wakes) the app to deliver this when a background
+    /// `URLSession` transfer finishes while the app wasn't running to see
+    /// it directly -- `identifier` is `BackgroundUploadManager`'s session
+    /// identifier ("com.imagegallery.ios.bg-upload"), the only background
+    /// session this app creates. Stashing the completion handler on the
+    /// manager itself (rather than calling it here) is required: iOS
+    /// expects it called only after every queued delegate event has been
+    /// replayed and handled, which `BackgroundUploadManager` finds out via
+    /// its own `urlSessionDidFinishEvents(forBackgroundURLSession:)`.
+    func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {
+        BackgroundUploadManager.shared.backgroundCompletionHandler = completionHandler
     }
 }

@@ -287,7 +287,11 @@ extension GalleryAPIClient {
         var checkSiteDuplicates: Bool = true
     }
 
-    private func uploadForm(_ fields: UploadFields) -> [String: String] {
+    /// Internal, not private -- `BackgroundUploadManager` (which does the
+    /// actual byte transfer now, see its header comment) builds the exact
+    /// same field mapping for both the direct and chunked-finish requests,
+    /// and reuses this rather than a second copy of the field-name mapping.
+    func uploadForm(_ fields: UploadFields) -> [String: String] {
         var form: [String: String] = [
             "title": fields.title,
             "description": fields.description,
@@ -303,11 +307,6 @@ extension GalleryAPIClient {
         if let publishAt = fields.publishAt, !publishAt.isEmpty { form["publish_at"] = publishAt }
         if fields.checkSiteDuplicates { form["check_site_duplicates"] = "true" }
         return form
-    }
-
-    func uploadMedia(data: Data, fileName: String, mimeType: String, fields: UploadFields) async throws -> MediaUploadResponse {
-        let file = MultipartFile(fieldName: "file", fileName: fileName, mimeType: mimeType, source: .data(data))
-        return try await upload("/api/media", fields: uploadForm(fields), file: file)
     }
 
     /// Pre-submit AI autofill preview -- mirrors web's dedicated "Analyze"
@@ -326,24 +325,19 @@ extension GalleryAPIClient {
         return try await upload("/api/media/analyze", fields: fields, file: file)
     }
 
-    /// Large-file variant — `fileURL` is streamed straight from disk into the
-    /// multipart request body instead of being loaded into memory (see
-    /// `GalleryAPIClient.upload`'s `.fileURL` case), so picking a multi-GB
-    /// video for upload doesn't risk the app being killed for memory use.
-    func uploadMedia(fileURL: URL, fileName: String, mimeType: String, fields: UploadFields) async throws -> MediaUploadResponse {
-        let file = MultipartFile(fieldName: "file", fileName: fileName, mimeType: mimeType, source: .fileURL(fileURL))
-        return try await upload("/api/media", fields: uploadForm(fields), file: file)
+    /// Internal, not private -- `BackgroundUploadManager` needs the same
+    /// `session_id`/`chunk_size` this returns to drive its own (background-
+    /// transfer) chunk loop. This one call stays a plain foreground request:
+    /// it's small and fast, and the app is by definition active when the
+    /// user just tapped Submit -- only the actual byte transfer that follows
+    /// needs background-transfer resilience.
+    struct UploadInitResponse: Decodable { var sessionId: String; var chunkSize: Int }
+    private struct UploadInitBody: Encodable { var totalSize: Int; var filename: String }
+
+    func uploadInit(totalSize: Int, filename: String) async throws -> UploadInitResponse {
+        try await requestJSON("/api/media/upload/init", body: UploadInitBody(totalSize: totalSize, filename: filename))
     }
 
-    private struct UploadInitBody: Encodable { var totalSize: Int; var filename: String }
-    private struct UploadInitResponse: Decodable { var sessionId: String; var chunkSize: Int }
-    private struct ChunkAck: Decodable { var ok: Bool; var receivedBytes: Int }
-    /// `upload_chunk_finish` in routes.lua ALWAYS responds 202 with this shape
-    /// (never the finished media synchronously) -- it hands the real work
-    /// (fast-start remux, full-file sha256, up to a 30s AI vision call) to a
-    /// background job and returns immediately. `jobId` is nil only if the
-    /// backend contract ever changes underneath this.
-    private struct UploadFinishAck: Decodable { var status: String; var jobId: String? }
     struct UploadJobStatusResponse: Decodable {
         var status: String
         var media: MediaItem?
@@ -352,99 +346,13 @@ extension GalleryAPIClient {
         var detail: String?
     }
 
-    /// One-shot check of `GET /api/media/upload/job/:job_id` (`M.upload_job_status`
-    /// in routes.lua) -- not private, unlike the rest of this upload-finish
-    /// machinery, since `UploadRecoveryService` also calls this directly to
-    /// poll on its own cadence (app-foreground events) rather than the tight
-    /// loop `pollUploadJob` below runs.
+    /// One-shot check of `GET /api/media/upload/job/:job_id`
+    /// (`M.upload_job_status` in routes.lua) -- used by
+    /// `UploadRecoveryService`'s foreground/launch poll. The actual chunk
+    /// upload/finish transfer that produces a job id now lives entirely in
+    /// `BackgroundUploadManager` (see its header comment), not here.
     func uploadJobStatus(jobId: String) async throws -> UploadJobStatusResponse {
         try await requestJSON("/api/media/upload/job/\(jobId)")
-    }
-
-    /// Polls `uploadJobStatus` until the background finish job lands on
-    /// "done"/"error". Web's equivalent (`Shell.jsx`) polls this from a
-    /// global, localStorage-backed queue every 6s so the uploader can
-    /// navigate away immediately; this app instead awaits it right here, on
-    /// the same screen the upload was started from -- `PendingUploadJobStore`
-    /// (written by the caller below) is the safety net for the one case this
-    /// doesn't cover on its own: the app being killed outright while this
-    /// loop is running, which `UploadRecoveryService` picks up on next
-    /// launch/foreground. The typical case resolves on the very first check
-    /// -- the comment on `upload_chunk_finish` server-side notes a real
-    /// response "normally comes back in well under a second" -- so this
-    /// checks immediately and only sleeps between subsequent polls. Bounded
-    /// to 6 minutes (jobs themselves live 24h server-side, but this call is
-    /// still on-screen waiting, not fire-and-forget) so a stuck job doesn't
-    /// spin the upload UI forever.
-    private func pollUploadJob(jobId: String) async throws -> MediaUploadResponse {
-        let deadline = Date().addingTimeInterval(360)
-        while true {
-            let job = try await uploadJobStatus(jobId: jobId)
-            switch job.status {
-            case "done":
-                guard let media = job.media else {
-                    throw GalleryAPIError.http(status: 0, message: "Upload finished but returned no media.")
-                }
-                return MediaUploadResponse(media: media, possibleDuplicates: job.possibleDuplicates, possibleSiteDuplicates: job.possibleSiteDuplicates)
-            case "error":
-                throw GalleryAPIError.http(status: 0, message: job.detail ?? "Upload failed.")
-            default:
-                if Date() >= deadline {
-                    throw GalleryAPIError.http(status: 0, message: "Upload is taking longer than expected. It may still finish in the background -- check your profile shortly.")
-                }
-                try await Task.sleep(nanoseconds: 2_000_000_000)
-            }
-        }
-    }
-
-    /// Splits large files into pieces before sending instead of one giant
-    /// request -- this deployment's Cloudflare tunnel hard-413s any single
-    /// request body over ~100MB regardless of the server's own configured
-    /// upload limit (confirmed live: a 105MB request gets a Cloudflare
-    /// error page before it ever reaches the app), which is what "network
-    /// connection was lost" on big video uploads actually was. Mirrors
-    /// `M.upload_chunk_init/_append/_finish` in routes.lua.
-    func uploadMediaChunked(fileURL: URL, fileName: String, fields: UploadFields, onProgress: ((Double) -> Void)? = nil) async throws -> MediaUploadResponse {
-        let totalSize = (try? FileManager.default.attributesOfItem(atPath: fileURL.path)[.size] as? Int) ?? nil
-        guard let totalSize, totalSize > 0 else {
-            throw GalleryAPIError.http(status: 0, message: "Could not read the file to upload.")
-        }
-
-        let initResponse: UploadInitResponse = try await requestJSON(
-            "/api/media/upload/init",
-            body: UploadInitBody(totalSize: totalSize, filename: fileName)
-        )
-
-        let reader = try FileHandle(forReadingFrom: fileURL)
-        defer { try? reader.close() }
-        var index = 0
-        var sentBytes = 0
-        while let chunk = try reader.read(upToCount: initResponse.chunkSize), !chunk.isEmpty {
-            let ack: ChunkAck = try await uploadChunkBytes(
-                "/api/media/upload/chunk",
-                query: ["session_id": initResponse.sessionId, "index": String(index)],
-                data: chunk
-            )
-            sentBytes = ack.receivedBytes
-            onProgress?(Double(sentBytes) / Double(totalSize))
-            index += 1
-        }
-
-        var body = uploadForm(fields)
-        body["session_id"] = initResponse.sessionId
-        let finishAck: UploadFinishAck = try await requestJSON("/api/media/upload/finish", body: body)
-        guard let jobId = finishAck.jobId else {
-            throw GalleryAPIError.http(status: 0, message: "Unexpected response finishing upload.")
-        }
-        // Written BEFORE polling starts and removed only once pollUploadJob
-        // actually returns/throws below -- if the app gets killed outright
-        // while that loop is running, this entry is left behind on disk for
-        // UploadRecoveryService to pick up and resolve on next launch/
-        // foreground, instead of the upload's outcome being lost from the
-        // client's perspective even though it already saved server-side.
-        PendingUploadJobStore.add(jobId: jobId, filename: fileName)
-        defer { PendingUploadJobStore.remove(jobId: jobId) }
-        return try await pollUploadJob(jobId: jobId)
     }
 
     /// Cached briefly (15s -- shorter than the general 30s list TTL since

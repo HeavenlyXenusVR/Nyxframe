@@ -168,7 +168,7 @@ struct MediaDetailView: View {
     private func setUpVideoControllerIfNeeded() {
         guard videoController == nil, let media = viewModel.media, media.isVideo else { return }
         guard let url = videoQualityURL(media, quality: videoQuality) else { return }
-        videoController = VideoPlayerController(url: url)
+        videoController = VideoPlayerController(url: url, mediaId: media.id)
     }
 
     private func changeQuality(_ quality: String, media: MediaItem) {
@@ -214,7 +214,7 @@ struct MediaDetailView: View {
             // below) still uses the true original for full quality once the
             // viewer explicitly asks for it.
             ZStack(alignment: .topTrailing) {
-                ZoomableAsyncImage(url: url)
+                ZoomableAsyncImage(url: url, diagnostics: ImageLoadDiagnosticsContext(mediaId: media.id, mediaKind: media.mediaKind ?? "", context: "media-detail"))
                 // scaledToFit alone is safe from the grid-overlap class of bug
                 // (single image, not competing with siblings for layout), but an
                 // extreme portrait aspect ratio could still stretch to fill most

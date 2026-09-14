@@ -138,6 +138,43 @@ actor ImageCache {
     }
 }
 
+/// Identifies the media a `CachedAsyncImage` is loading, purely for the
+/// optional load-diagnostics beacon below -- mirrors the `diagnostics={{
+/// mediaId, mediaKind, context }}` prop web's `ResilientImage` (ui.jsx)
+/// takes at its highest-value call sites (feed cards, media detail,
+/// profile avatar) rather than every single image in the app.
+struct ImageLoadDiagnosticsContext {
+    var mediaId: Int
+    var mediaKind: String
+    var context: String
+}
+
+/// De-dupes repeat diagnostic beacons for an image already reported this
+/// session -- a SwiftUI re-render of the same successful/failed image
+/// (scrolling a cell off/on screen, an unrelated state change) would
+/// otherwise re-fire the beacon every time `.task(id:)` re-runs. Oldest-
+/// eviction once the cap is hit, not a wholesale clear (that bug was found
+/// and fixed on the web side's equivalent `reportedMediaDiagnostics` Set --
+/// no reason to reintroduce it here).
+@MainActor
+private final class ReportedImageDiagnostics {
+    static let shared = ReportedImageDiagnostics()
+    private var order: [String] = []
+    private var seen: Set<String> = []
+    private let cap = 800
+
+    func markIfNew(_ signature: String) -> Bool {
+        guard !seen.contains(signature) else { return false }
+        seen.insert(signature)
+        order.append(signature)
+        if order.count > cap {
+            let oldest = order.removeFirst()
+            seen.remove(oldest)
+        }
+        return true
+    }
+}
+
 /// Drop-in `AsyncImage` replacement with a real cache -- same
 /// `url:content:` phase-based signature, so every existing call site
 /// (`AsyncImage(url:) { phase in ... }`) only needs the type name changed,
@@ -157,11 +194,13 @@ actor ImageCache {
 struct CachedAsyncImage<Content: View>: View {
     private let url: URL?
     private let content: (AsyncImagePhase) -> Content
+    private let diagnostics: ImageLoadDiagnosticsContext?
 
     @State private var phase: AsyncImagePhase = .empty
 
-    init(url: URL?, @ViewBuilder content: @escaping (AsyncImagePhase) -> Content) {
+    init(url: URL?, diagnostics: ImageLoadDiagnosticsContext? = nil, @ViewBuilder content: @escaping (AsyncImagePhase) -> Content) {
         self.url = url
+        self.diagnostics = diagnostics
         self.content = content
     }
 
@@ -184,9 +223,21 @@ struct CachedAsyncImage<Content: View>: View {
             let uiImage = try await ImageCache.shared.loadImage(for: url)
             guard !Task.isCancelled else { return }
             phase = .success(Image(uiImage: uiImage))
+            reportLoad(outcome: "success")
         } catch {
             guard !Task.isCancelled else { return }
             phase = .failure(error)
+            reportLoad(outcome: "error")
         }
+    }
+
+    private func reportLoad(outcome: String) {
+        guard let diagnostics, let url else { return }
+        let signature = "\(diagnostics.mediaId)|\(diagnostics.context)|\(outcome)"
+        guard ReportedImageDiagnostics.shared.markIfNew(signature) else { return }
+        DiagnosticsReporter.reportMediaLoad(
+            mediaId: diagnostics.mediaId, mediaKind: diagnostics.mediaKind,
+            context: diagnostics.context, outcome: outcome, selectedSource: url.lastPathComponent
+        )
     }
 }
