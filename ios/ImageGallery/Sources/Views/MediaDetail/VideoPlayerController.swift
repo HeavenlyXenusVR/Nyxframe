@@ -38,6 +38,14 @@ final class VideoPlayerController: ObservableObject {
     private var stallTotalMs = 0
     private var hasPlayedOnce = false
     private var stallObserver: NSObjectProtocol?
+    /// Plain (non-`@Published`) mirror of "did `errorMessage` end up set" --
+    /// `deinit` can't read `errorMessage` itself: it's `@Published`, and a
+    /// property wrapper's accessor is MainActor-isolated even though
+    /// `deinit` itself is not (unlike a plain stored property, which
+    /// `deinit` may read directly). Confirmed by CI: "main actor-isolated
+    /// property 'errorMessage' can not be referenced from a nonisolated
+    /// context" at exactly this read.
+    private var hadFatalError = false
 
     init(url: URL, mediaId: Int) {
         self.url = url
@@ -50,6 +58,7 @@ final class VideoPlayerController: ObservableObject {
         url = newURL
         retryAttempt = 0
         errorMessage = nil
+        hadFatalError = false
         player = nil
         startPlayback(autoplay: wasPlaying)
     }
@@ -66,6 +75,7 @@ final class VideoPlayerController: ObservableObject {
     func retry() {
         retryAttempt = 0
         errorMessage = nil
+        hadFatalError = false
         startPlayback(autoplay: true)
     }
 
@@ -229,6 +239,7 @@ final class VideoPlayerController: ObservableObject {
     private func handleFailure(_ error: Error?) {
         guard isTransientNetworkError(error), retryAttempt < Self.maxRetries else {
             errorMessage = error?.localizedDescription ?? "Unknown error."
+            hadFatalError = true
             return
         }
         retryAttempt += 1
@@ -278,7 +289,7 @@ final class VideoPlayerController: ObservableObject {
         guard loadStartedAt != nil else { return }
         DiagnosticsReporter.reportMediaPlayback(
             mediaId: mediaId,
-            outcome: errorMessage != nil ? "error" : hasPlayedOnce ? "played" : "abandoned",
+            outcome: hadFatalError ? "error" : hasPlayedOnce ? "played" : "abandoned",
             quality: nil, timeToFirstFrameMs: firstFrameMs,
             stallCount: stallCount, stallTotalMs: stallTotalMs, retryCount: retryAttempt
         )
