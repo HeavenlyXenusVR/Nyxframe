@@ -192,19 +192,22 @@ final class UploadViewModel: ObservableObject {
     }
 
     /// Validates the form, hands the picked file off to
-    /// `BackgroundUploadManager` for the actual transfer, and returns right
-    /// away -- this no longer awaits the upload finishing (see
-    /// `BackgroundUploadManager`'s header comment for why: the whole point
-    /// is that a transfer survives the app being backgrounded or killed,
-    /// which rules out resuming an in-memory awaited continuation for the
-    /// "it finished" signal). `true` means "successfully queued for
-    /// background transfer", not "upload complete" -- the real outcome
-    /// surfaces later via `BackgroundUploadManager.shared.completionNotice`
-    /// (see `ImageGalleryApp.swift`'s alert), same as web's `UploadPage.jsx`
-    /// showing "queued" and moving on rather than blocking on the transfer.
-    /// The caller (`UploadView`) is free to dismiss/navigate the instant
-    /// this returns `true`.
-    func submit() -> Bool {
+    /// `BackgroundUploadManager` for the actual transfer, and returns once
+    /// that hand-off's own setup is done -- NOT once the upload finishes
+    /// (see `BackgroundUploadManager.enqueue`'s doc comment: the whole
+    /// point is that the transfer survives the app being backgrounded or
+    /// killed, which rules out resuming an in-memory awaited continuation
+    /// for the "it finished" signal; `enqueue` itself is `async` only to
+    /// guarantee its own bounded setup -- copy the file, register the
+    /// first background task -- actually completes before this returns).
+    /// `true` means "successfully queued for background transfer", not
+    /// "upload complete" -- the real outcome surfaces later via
+    /// `BackgroundUploadManager.shared.completionNotice` (see
+    /// `ImageGalleryApp.swift`'s alert), same as web's `UploadPage.jsx`
+    /// showing "queued" and moving on rather than blocking on the
+    /// transfer. The caller (`UploadView`) is free to dismiss/navigate the
+    /// instant this returns `true`.
+    func submit() async -> Bool {
         guard pickedData != nil || pickedFileURL != nil else {
             errorMessage = "Choose a photo or video first."
             return false
@@ -254,7 +257,7 @@ final class UploadViewModel: ObservableObject {
 
         isUploading = true
         uploadProgress = 0
-        let id = BackgroundUploadManager.shared.enqueue(sourceURL: sourceURL, filename: pickedFileName, mimeType: pickedMimeType, fields: fields)
+        let id = await BackgroundUploadManager.shared.enqueue(sourceURL: sourceURL, filename: pickedFileName, mimeType: pickedMimeType, fields: fields)
         observeProgress(id: id)
         // myMedia() is cached (see GalleryAPIClient+Endpoints.swift) -- this
         // upload won't be visible server-side for a while yet (still

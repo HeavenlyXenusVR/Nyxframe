@@ -156,9 +156,11 @@ struct UploadView: View {
 
     private var publishBar: some View {
         Button {
-            if viewModel.submit() {
-                showingQueued = true
-                viewModel.reset()
+            Task {
+                if await viewModel.submit() {
+                    showingQueued = true
+                    viewModel.reset()
+                }
             }
         } label: {
             Group {

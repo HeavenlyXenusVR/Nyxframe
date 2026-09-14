@@ -95,34 +95,61 @@ final class BackgroundUploadManager: NSObject, ObservableObject {
         // opportune, low-power moment (that's what `isDiscretionary` gates).
         configuration.isDiscretionary = false
         configuration.sessionSendsLaunchEvents = true
+        // Lets the OS keep an otherwise-idle connection to the origin open
+        // longer than the default before tearing it down for inactivity --
+        // relevant here since a chunk request can spend real time
+        // established-but-quiet (see the ~125s "Empty chunk" failures this
+        // whole file's header comment documents) before data actually
+        // moves under background scheduling.
+        configuration.shouldUseExtendedBackgroundIdleMode = true
         session = URLSession(configuration: configuration, delegate: self, delegateQueue: nil)
         reconcile()
     }
 
     // MARK: - Public API
 
-    /// Hands a picked file off to be transferred in the background and
-    /// returns an id immediately -- callers (`UploadViewModel`) don't await
-    /// completion here; that's the entire point. `sourceURL` must already
-    /// be a file on disk (not in-memory `Data`) -- `UploadViewModel` writes
-    /// a picked image to a temp file before calling this, same as it
-    /// already did for a picked video.
+    /// Hands a picked file off to be transferred in the background.
+    /// `sourceURL` must already be a file on disk (not in-memory `Data`) --
+    /// `UploadViewModel` writes a picked image to a temp file before
+    /// calling this, same as it already did for a picked video.
     ///
-    /// BUGFIX (confirmed live, 2026-09-14): the copy of `sourceURL` into
+    /// `async`, but callers still don't wait for the actual transfer --
+    /// only for this method's own setup to finish (copy the file, and get
+    /// the very first `URLSessionTask` created and `.resume()`'d). That's
+    /// a bounded, sub-second wait (one fast JSON init call for the chunked
+    /// path, some local disk I/O), never the multi-second-to-multi-minute
+    /// transfer itself.
+    ///
+    /// BUGFIX #1 (confirmed live, 2026-09-14): the copy of `sourceURL` into
     /// this manager's own storage used to happen inside a `Task.detached`,
     /// racing `UploadView`'s button action, which calls
     /// `viewModel.reset()` (deleting the picked file) immediately after
     /// this returns. When the detached copy lost that race, the source was
-    /// already gone by the time it ran -- `copyItem` against a missing
-    /// file just silently produced nothing usable, and the resulting
-    /// multipart body went out with an empty file field. Confirmed live:
-    /// two uploads both 400'd with "Upload is empty" after the background
-    /// transfer actually completed (~125s each). Copying synchronously
-    /// here, on the caller's thread, before returning, closes the window
-    /// completely -- by the time `enqueue` returns, the source is safely
-    /// duplicated and the caller is free to delete its own copy.
+    /// already gone by the time it ran, and the resulting multipart body
+    /// went out with an empty file field. Copying synchronously here, on
+    /// the caller's thread, before returning, closes that window.
+    ///
+    /// BUGFIX #2 (confirmed live, 2026-09-14): dropping the chunk size
+    /// (20MB -> 4MB, `lua/src/routes.lua`) did NOT fix the "Empty chunk"/
+    /// "Upload is empty" 400s some backgrounded uploads still hit -- same
+    /// failure, same ~125s duration, regardless of chunk size, which rules
+    /// out "too much data for the time available" as the cause. The
+    /// remaining suspect: the original init-then-first-chunk sequence ran
+    /// inside a plain `Task.detached` with no execution privilege, exactly
+    /// like bug #1 above but for the *next* step -- if the app got
+    /// backgrounded in the gap between `/api/media/upload/init` succeeding
+    /// and that continuation actually reaching a chunk task's `.resume()`,
+    /// the continuation itself could be silently frozen mid-flight. Now
+    /// `await`ed directly here (not detached) instead, so the whole init +
+    /// first-task-registration sequence completes -- and that first task
+    /// is genuinely `.resume()`'d -- while the caller is still guaranteed
+    /// to be in whatever foreground state it was in when Publish was
+    /// tapped. Every step after that first task exists is driven entirely
+    /// by that task's own delegate callbacks, which iOS delivers
+    /// regardless of app state -- only this initial hand-off was ever at
+    /// risk of stalling silently.
     @discardableResult
-    func enqueue(sourceURL: URL, filename: String, mimeType: String, fields: GalleryAPIClient.UploadFields) -> String {
+    func enqueue(sourceURL: URL, filename: String, mimeType: String, fields: GalleryAPIClient.UploadFields) async -> String {
         let id = UUID().uuidString
         progress[id] = 0
         do {
@@ -134,19 +161,16 @@ final class BackgroundUploadManager: NSObject, ObservableObject {
             completionNotice = "Could not start the upload: \(error.localizedDescription)"
             return id
         }
-        Task.detached(priority: .utility) { [weak self] in
-            guard let self else { return }
-            let totalSize = (try? self.fileManager.attributesOfItem(atPath: self.sourcePath(id).path)[.size] as? Int) ?? nil ?? 0
-            let formFields = GalleryAPIClient.shared.uploadForm(fields)
-            let fieldsJSON = (try? JSONEncoder().encode(formFields)) ?? Data()
-            let phase: ManagedUpload.Phase = totalSize > Self.chunkedThresholdBytes ? .initializingChunked : .sendingSmall
-            let upload = ManagedUpload(
-                id: id, filename: filename, mimeType: mimeType, fieldsJSON: fieldsJSON, totalSize: totalSize,
-                phase: phase, enqueuedAt: Date()
-            )
-            self.saveState(upload)
-            await self.advance(id: id)
-        }
+        let totalSize = (try? fileManager.attributesOfItem(atPath: sourcePath(id).path)[.size] as? Int) ?? nil ?? 0
+        let formFields = GalleryAPIClient.shared.uploadForm(fields)
+        let fieldsJSON = (try? JSONEncoder().encode(formFields)) ?? Data()
+        let phase: ManagedUpload.Phase = totalSize > Self.chunkedThresholdBytes ? .initializingChunked : .sendingSmall
+        let upload = ManagedUpload(
+            id: id, filename: filename, mimeType: mimeType, fieldsJSON: fieldsJSON, totalSize: totalSize,
+            phase: phase, enqueuedAt: Date()
+        )
+        saveState(upload)
+        await advance(id: id)
         return id
     }
 
