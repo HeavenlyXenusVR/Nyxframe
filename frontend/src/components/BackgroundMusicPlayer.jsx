@@ -3,8 +3,18 @@ import { Music, VolumeX } from "lucide-react";
 import { apiFetch } from "../api.js";
 
 const MUTE_STORAGE_KEY = "nyxframe_bg_music_muted";
-const NORMAL_VOLUME = 0.35;
-const DUCK_VOLUME = 0.06;
+// BUGFIX 2026-09-14: was 0.35/0.06 -- confirmed live (real device test,
+// nothing blocked, playback genuinely running at this volume) that this
+// read as "basically silent" in practice once combined with a normal
+// system volume and the source track's own moderate loudness (-26dB mean,
+// confirmed via ffmpeg volumedetect against the actual stored file -- nice
+// dynamic range for a full track, but quiet as *background* music at only
+// 35% on top of that). Raised to something actually audible as ambient
+// music; DUCK_VOLUME keeps roughly the same ~1:6 ratio to NORMAL_VOLUME as
+// before, so ducking under video audio still fades to a faint bed rather
+// than a full mute, just scaled up with it.
+const NORMAL_VOLUME = 0.6;
+const DUCK_VOLUME = 0.1;
 const FADE_MS = 400;
 
 // VideoPlayer.jsx dispatches this on every play/pause (native <video> and
