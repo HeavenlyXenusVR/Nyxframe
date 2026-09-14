@@ -402,7 +402,7 @@ local function telemetry_section(req)
   -- telemetry.lua's M.job_snapshot), so iteration order isn't stable.
   local JOB_ORDER = {
     "media_warmer", "stale_transcode_cleanup", "hls_idle_reaper",
-    "weekly_digest", "telegram_poll", "db_health_watch",
+    "weekly_digest", "telegram_poll", "db_health_watch", "deleted_media_purge",
   }
   for _, name in ipairs(JOB_ORDER) do
     local job = body.jobs and body.jobs[name]

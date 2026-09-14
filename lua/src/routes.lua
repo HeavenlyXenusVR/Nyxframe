@@ -9987,4 +9987,107 @@ function M.admin_telemetry(req)
   }
 end
 
+-- ---------------------------------------------------------------------------
+-- Permanent deletion of long-soft-deleted media. `perform_delete_media`
+-- (this file, ~line 3762) only ever sets deleted_at + visibility='private'
+-- -- kept indefinitely with no automatic cleanup until now, confirmed live
+-- 2026-09-14 (a user asked how long a deleted post stays recoverable; the
+-- honest answer at the time was "forever"). Runs once a day, primary
+-- worker only (same gate as every other background loop in this file),
+-- hard-deleting any media_items row whose deleted_at is older than
+-- GALLERY_DELETED_MEDIA_RETENTION_DAYS (default 10) -- past that point
+-- restore_media can no longer bring it back, so this is a real, permanent,
+-- irreversible cleanup, unlike every other background loop in this file.
+--
+-- Every table that references media_items(id) does so with ON DELETE
+-- CASCADE (confirmed live against the schema) except
+-- ai_vision_training_examples, which deliberately uses ON DELETE SET NULL
+-- so training examples outlive the media that inspired them -- a plain
+-- DELETE FROM media_items here cleans up every dependent row correctly
+-- with no separate cleanup needed for any of them.
+--
+-- The physical file is a different story: storage is content-addressed
+-- (media/<shard>/<sha256>.<ext>), so more than one media_items row can
+-- point at the exact same file (confirmed live the same day: two
+-- near-simultaneous test uploads of the same video landed on the
+-- identical storage_path). The file is only unlinked once no OTHER
+-- media_items row -- deleted or not, this candidate's own row already
+-- removed by that point -- still references that path. Racy in principle
+-- against a concurrent upload landing on the same content-hash between
+-- that check and the unlink, but the worst case is a rare orphaned
+-- original file, the same class of gap the existing cache-orphan purge
+-- (admin_purge_storage_orphans) already tolerates -- not a new risk, and
+-- that same admin action would eventually catch a leftover cache entry for
+-- it regardless.
+-- Nested INSIDE M.start_deleted_media_purge below (not top-level locals)
+-- for the same reason range_io/sweep_once/reap_once all are elsewhere in
+-- this file: the main chunk is already at LuaJIT's 200-local ceiling --
+-- confirmed live, adding this as two more top-level locals broke
+-- `luajit -e "loadfile(...)"` with the exact "more than 200 local
+-- variables" error the range_io comment already warns about.
+function M.start_deleted_media_purge()
+  local copas = require("copas")
+  local SWEEP_INTERVAL_SECONDS = 6 * 3600
+
+  local function purge_deleted_media_once()
+    local retention_days = math.max(1, M.settings.deleted_media_retention_days or 10)
+    local candidates = db.fetchall(
+      "SELECT id, storage_path FROM media_items WHERE deleted_at IS NOT NULL AND deleted_at < now() - (%s || ' days')::interval",
+      tostring(retention_days)
+    )
+    local removed_rows, removed_files, freed_bytes = 0, 0, 0
+    for _, item in ipairs(candidates) do
+      local media_id = db.toint(item.id, item.id)
+      local storage_path = nn(item.storage_path)
+      -- Redundant deleted_at guard: closes the window where this row was
+      -- restored between the SELECT above and this DELETE.
+      local deleted_ok = db.execute("DELETE FROM media_items WHERE id=%s AND deleted_at IS NOT NULL", tostring(media_id))
+      if deleted_ok then
+        removed_rows = removed_rows + 1
+        if storage_path then
+          local still_referenced = db.fetchone("SELECT id FROM media_items WHERE storage_path=%s LIMIT 1", storage_path)
+          if not still_referenced then
+            local full_path = M.settings.uploads_dir .. "/" .. storage_path
+            local size = 0
+            local f = io.open(full_path, "rb")
+            if f then
+              size = f:seek("end") or 0
+              f:close()
+            end
+            if os.remove(full_path) then
+              removed_files = removed_files + 1
+              freed_bytes = freed_bytes + size
+            end
+          end
+        end
+      end
+    end
+    return removed_rows, removed_files, freed_bytes
+  end
+
+  copas.addthread(function()
+    while true do
+      local telemetry_t0 = M.telemetry.now()
+      local ok, removed_rows, removed_files, freed_bytes = pcall(purge_deleted_media_once)
+      local telemetry_ms = M.telemetry.ms_since(telemetry_t0)
+      if not ok then
+        print("[nyxframe] deleted-media purge error: " .. tostring(removed_rows))
+        M.telemetry.job_result("deleted_media_purge", false, telemetry_ms, { error = tostring(removed_rows):sub(1, 300) })
+      elseif removed_rows and removed_rows > 0 then
+        print(string.format(
+          "[nyxframe] deleted-media purge: permanently removed %d post(s), %d file(s), freed %d bytes",
+          removed_rows, removed_files or 0, freed_bytes or 0
+        ))
+        write_audit_log(nil, "deleted_media_purge", "storage", nil,
+          string.format("removed=%d files=%d bytes=%d", removed_rows, removed_files or 0, freed_bytes or 0))
+        M.telemetry.job_result("deleted_media_purge", true, telemetry_ms,
+          { removed_rows = removed_rows, removed_files = removed_files, freed_bytes = freed_bytes })
+      else
+        M.telemetry.job_result("deleted_media_purge", true, telemetry_ms, nil)
+      end
+      copas.sleep(SWEEP_INTERVAL_SECONDS)
+    end
+  end)
+end
+
 return M

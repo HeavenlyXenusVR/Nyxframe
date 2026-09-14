@@ -392,6 +392,15 @@ if is_primary_worker and hls_idle_reaper_enabled then routes.start_hls_idle_reap
 -- its own timer, which is harmless but pointlessly redundant.
 if is_primary_worker then telemetry.start_pruner() end
 
+-- Permanent deletion of long-soft-deleted media (see routes.lua's
+-- M.start_deleted_media_purge doc comment) -- a user asked live 2026-09-14
+-- how long a deleted post stays recoverable; the honest answer until now
+-- was "forever". Same primary-worker gate as every background loop above.
+-- Unlike the others, this one's off-switch guards a genuinely irreversible
+-- action (hard-deletes the row and its file), not just a CPU-cost one --
+-- settings.deleted_media_purge_enabled defaults to true (config.lua).
+if is_primary_worker and settings.deleted_media_purge_enabled then routes.start_deleted_media_purge() end
+
 httpd.listen(settings.host, settings.port)
 print(string.format("[nyxframe] listening on %s:%d", settings.host, settings.port))
 httpd.run()

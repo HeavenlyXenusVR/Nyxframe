@@ -173,6 +173,15 @@ function M.load()
     -- config value directly.
     telemetry_enabled = env_bool("GALLERY_TELEMETRY_ENABLED", true),
     telemetry_retention_days = math.max(1, env_int("GALLERY_TELEMETRY_RETENTION_DAYS", 14)),
+
+    -- routes.lua's M.start_deleted_media_purge: how long a soft-deleted
+    -- post (delete_media only ever sets deleted_at, never removes the row)
+    -- stays recoverable via restore_media before a daily sweep hard-deletes
+    -- it and its file for good. Kill-switch matches the warmer/cleanup/
+    -- reaper convention elsewhere in main.lua -- this one guards a genuinely
+    -- irreversible action, not just a CPU-cost one.
+    deleted_media_retention_days = math.max(1, env_int("GALLERY_DELETED_MEDIA_RETENTION_DAYS", 10)),
+    deleted_media_purge_enabled = env_bool("GALLERY_ENABLE_DELETED_MEDIA_PURGE", true),
   }
 end
 
