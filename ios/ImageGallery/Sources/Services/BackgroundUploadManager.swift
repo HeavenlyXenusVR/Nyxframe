@@ -57,11 +57,23 @@ final class BackgroundUploadManager: NSObject, ObservableObject {
     var backgroundCompletionHandler: (() -> Void)?
 
     /// Above this, an upload goes through the chunked init/chunk/finish
-    /// flow instead of one direct multipart POST -- same threshold
-    /// `UploadViewModel` used before this rewrite (this deployment's
-    /// Cloudflare tunnel hard-413s any single request body over ~100MB
-    /// regardless of the server's own configured limit).
-    static let chunkedThresholdBytes = 60 * 1024 * 1024
+    /// flow instead of one direct multipart POST.
+    ///
+    /// BUGFIX 2026-09-14: was 60MB (this deployment's Cloudflare tunnel
+    /// hard-413s any single request body over ~100MB regardless of the
+    /// server's own configured limit, so 60MB was sized only against
+    /// THAT). Confirmed live alongside the chunk-size fix
+    /// (`lua/src/routes.lua`'s `M.upload_chunk_init`, 20MB -> 4MB): the
+    /// direct path sends the whole file as ONE request with no chunking at
+    /// all, so it's exposed to the exact same failure mode -- Cloudflare's
+    /// edge gives up on a request after ~120s regardless of body size, and
+    /// a backgrounded transfer (iOS deliberately throttles background
+    /// network priority) can take far longer than that to move even a
+    /// "small" 60MB file. Dropped to 10MB, comfortably below what a
+    /// throttled background connection can be expected to move within
+    /// 120s -- everything above this now gets the chunked path's per-chunk
+    /// resilience (retry a failed 4MB piece, not the whole file) instead.
+    static let chunkedThresholdBytes = 10 * 1024 * 1024
     private static let maxRetries = 3
 
     private var session: URLSession!
