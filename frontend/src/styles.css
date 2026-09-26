@@ -2195,6 +2195,156 @@ textarea:focus {
   to   { opacity: 1; transform: translateY(0); }
 }
 
+/* Keyboard focus ring -- the player container is focusable now (clicking
+   it focuses it, which is what scopes the keyboard shortcuts to it), so
+   keyboard users need to see when it holds focus. :focus-visible only,
+   so a mouse click doesn't leave a ring behind. */
+.vp-root:focus-visible {
+  outline: 2px solid rgba(55, 201, 167, 0.85);
+  outline-offset: 2px;
+}
+
+/* Double-tap-to-seek ripple */
+.vp-seek-flash {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 18px 22px;
+  border-radius: 999px;
+  background: rgba(6, 10, 14, 0.55);
+  color: #fff;
+  font-size: 0.74rem;
+  font-weight: 700;
+  pointer-events: none;
+  animation: vp-seek-flash-out 520ms ease-out both;
+}
+
+.vp-seek-flash-left { left: 8%; }
+.vp-seek-flash-right { right: 8%; }
+
+@keyframes vp-seek-flash-out {
+  from { opacity: 0; transform: translateY(-50%) scale(0.86); }
+  25%  { opacity: 1; transform: translateY(-50%) scale(1); }
+  to   { opacity: 0; transform: translateY(-50%) scale(1.08); }
+}
+
+/* "Resumed from ..." chip */
+.vp-resume-chip {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px 7px 14px;
+  border-radius: 999px;
+  background: rgba(6, 10, 14, 0.76);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  backdrop-filter: blur(8px);
+  animation: vp-sound-hint-in 220ms ease both;
+}
+
+.vp-resume-chip button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 11px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(55, 201, 167, 0.22);
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+  transition: background 140ms;
+}
+
+.vp-resume-chip button:hover {
+  background: rgba(55, 201, 167, 0.4);
+}
+
+/* The watermark sits top-left and the sound hint top-left too; on a
+   narrow screen the resume chip would collide with the mute affordance,
+   so drop its label there and keep only the action. */
+@media (max-width: 560px) {
+  .vp-resume-chip > span {
+    display: none;
+  }
+}
+
+/* Stats overlay */
+.vp-stats {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 6;
+  min-width: 208px;
+  max-width: min(72%, 320px);
+  padding: 10px 12px 12px;
+  border-radius: 12px;
+  background: rgba(4, 7, 11, 0.86);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 0.72rem;
+  backdrop-filter: blur(10px);
+  cursor: default;
+}
+
+.vp-stats-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  font-size: 0.66rem;
+  color: rgba(255, 255, 255, 0.7);
+  margin-bottom: 8px;
+}
+
+.vp-stats-head button {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.vp-stats dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 3px 12px;
+  margin: 0;
+}
+
+.vp-stats dt {
+  color: rgba(255, 255, 255, 0.55);
+  white-space: nowrap;
+}
+
+.vp-stats dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Separated trailing item in the speed menu (the stats toggle) */
+.vp-menu-item-sep {
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  margin-top: 4px;
+  padding-top: 8px;
+}
+
 /* Fullscreen adjustments */
 .vp-fullscreen .vp-bottom {
   padding-bottom: max(12px, env(safe-area-inset-bottom));

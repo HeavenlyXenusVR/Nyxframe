@@ -8,6 +8,7 @@ import { MediaActionPanel, MediaControls, MediaEditor } from "../components/medi
 import { VideoPlayer } from "../components/VideoPlayer.jsx";
 import { Avatar, ChipRow, EmptyState, glassPointerMove, Notice, NotFound, Page, ResilientImage, SkeletonGrid, StatsRow, UserLine } from "../components/ui.jsx";
 import { imageQualityUrl, isGifMedia, thumbUrl, videoQualityUrl } from "../utils/media.js";
+import { getPlayerPref, setPlayerPref } from "../utils/playerPrefs.js";
 
 const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🔥"];
 
@@ -35,7 +36,14 @@ export function MediaDetailPage({ ctx }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [imageQuality, setImageQuality] = useState("medium");
-  const [videoQuality, setVideoQuality] = useState("original");
+  // Seeded from the viewer's own last explicit choice: someone on a
+  // capped connection who picks 480p meant it for their connection, not
+  // for that one post, and re-picking it on every video was busywork.
+  // Only ever written from a real menu pick (see changeVideoQuality) --
+  // the player also calls onQualityChange by itself to escape an
+  // undecodable codec, and remembering THAT would pin an unrelated
+  // fallback quality across the whole site.
+  const [videoQuality, setVideoQuality] = useState(() => getPlayerPref("quality", "original"));
   const actions = useMediaActions(ctx, (updated) => setMedia(updated));
   const abortRef = useRef(null);
 
@@ -71,8 +79,13 @@ export function MediaDetailPage({ ctx }) {
     return () => { if (abortRef.current) abortRef.current.abort(); };
   }, [loadDetail]);
 
+  const changeVideoQuality = useCallback((value, options) => {
+    setVideoQuality(value);
+    if (options?.userInitiated) setPlayerPref("quality", value);
+  }, []);
+
   useEffect(() => {
-    setVideoQuality("original");
+    setVideoQuality(getPlayerPref("quality", "original"));
     setImageQuality("medium");
   }, [mediaId]);
 
@@ -82,6 +95,15 @@ export function MediaDetailPage({ ctx }) {
     if (nextIndex < 0 || nextIndex >= siblingIds.length) return;
     navigate(`/media/${siblingIds[nextIndex]}`, { state: { siblingIds, atIndex: nextIndex }, replace: true });
   }, [navigate, siblingIds]);
+
+  // Stable identities: the player registers these as OS media-session
+  // handlers and re-binds its keyboard listener whenever they change, so
+  // a fresh closure on every render would churn both on every keystroke
+  // in the comment box.
+  const hasPrevious = siblingIndex > 0;
+  const hasNext = siblingIndex >= 0 && siblingIndex < siblingIds.length - 1;
+  const goToPreviousSibling = useCallback(() => goToSibling(siblingIndex - 1), [goToSibling, siblingIndex]);
+  const goToNextSibling = useCallback(() => goToSibling(siblingIndex + 1), [goToSibling, siblingIndex]);
 
   useEffect(() => {
     if (siblingIndex < 0 || siblingIds.length < 2) return undefined;
@@ -225,10 +247,13 @@ export function MediaDetailPage({ ctx }) {
               src={videoSrc}
               poster={thumbUrl(media, 640)}
               quality={videoQuality}
-              onQualityChange={setVideoQuality}
+              onQualityChange={changeVideoQuality}
               qualityOptions={[["original", "Original"], ["1080p", "1080p HD"], ["720p", "720p"], ["480p", "480p"], ["144p", "144p"]]}
               title={media.title}
               mediaId={media.id}
+              author={media.display_name || media.username}
+              onPrevious={hasPrevious ? goToPreviousSibling : undefined}
+              onNext={hasNext ? goToNextSibling : undefined}
             />
           ) : (
             <>
