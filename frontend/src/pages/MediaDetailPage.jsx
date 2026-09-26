@@ -248,7 +248,7 @@ export function MediaDetailPage({ ctx }) {
               poster={thumbUrl(media, 640)}
               quality={videoQuality}
               onQualityChange={changeVideoQuality}
-              qualityOptions={[["original", "Original"], ["1080p", "1080p HD"], ["720p", "720p"], ["480p", "480p"], ["144p", "144p"]]}
+              qualityOptions={[["auto", "Auto"], ["original", "Original"], ["1080p", "1080p HD"], ["720p", "720p"], ["480p", "480p"], ["144p", "144p"]]}
               title={media.title}
               mediaId={media.id}
               author={media.display_name || media.username}

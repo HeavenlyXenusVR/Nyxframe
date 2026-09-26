@@ -1,11 +1,36 @@
-import { useEffect, useState } from "react";
-import { Link, NavLink } from "react-router-dom";
-import { AlertTriangle, Folder, Grid3X3, Heart, Home, Image as ImageIcon, LogIn, LogOut, MessageCircle, Moon, Rocket, Settings, ShieldAlert, Sparkles, Sun, SunMoon, TrendingUp, Upload, UserPlus, Users, X as XIcon } from "lucide-react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Link, NavLink, useLocation } from "react-router-dom";
+import { AlertTriangle, Folder, Grid3X3, Heart, Home, Image as ImageIcon, LogIn, LogOut, MessageCircle, Moon, MoreHorizontal, Rocket, Search as SearchIcon, Settings, ShieldAlert, Sparkles, Sun, SunMoon, TrendingUp, Upload, UserPlus, Users, X as XIcon } from "lucide-react";
 import { apiFetch, cachedApiFetch } from "../api.js";
 import { useLiveRefresh } from "../hooks/useLiveRefresh.js";
 import { getPendingUploadJobs, removePendingUploadJob } from "../uploadJobs.js";
 import { Avatar, GlassFilterDefs, glassPointerMove } from "./ui.jsx";
 import { NotificationBell } from "./NotificationBell.jsx";
+
+// The primary nav has grown to eleven entries for a signed-in owner.
+// That is fine on a wide screen and impossible on a phone: the fixed
+// bottom bar laid them out in a single row of 66px-minimum cells, which
+// measured 436px of content in a 412px viewport -- "Discover" was
+// clipped off the left edge and the last label was truncated, on the
+// default phone size, signed out. Rather than shrink everything until it
+// stops overflowing (and becomes unreadable and untappable), the bar now
+// carries a fixed handful of primary destinations plus a "More" sheet
+// holding the rest. `primary` is that split, and it only matters below
+// the breakpoint -- the desktop nav still renders every item inline.
+const NAV_ITEMS = [
+  { to: "/", icon: Home, label: "Discover", primary: true },
+  { to: "/trending", icon: TrendingUp, label: "Trending", primary: true },
+  { to: "/collections", icon: Folder, label: "Collections" },
+  { to: "/users", icon: Users, label: "Users" },
+  { to: "/following", icon: Sparkles, label: "Following" },
+  { to: "/liked", icon: Heart, label: "Liked" },
+  { to: "/friends", icon: UserPlus, label: "Friends", auth: true },
+  { to: "/messages", icon: MessageCircle, label: "Messages", auth: true },
+  { to: "/studio", icon: Grid3X3, label: "Studio", auth: true },
+  { to: "/upload", icon: Upload, label: "Upload", auth: true, accent: true, primary: true },
+  { to: "/admin", icon: ShieldAlert, label: "Admin", owner: true },
+  { to: "/other-projects", icon: Rocket, label: "My Other Projects" },
+];
 
 const THEME_ICONS = { dark: Moon, light: Sun, "": SunMoon };
 const THEME_LABELS = { dark: "Switch to light theme", light: "Switch to system theme", "": "Switch to dark theme" };
@@ -18,6 +43,65 @@ export function Shell({ ctx, children, className = "", style }) {
   const username = ctx.user?.username || "guest";
   const [site, setSite] = useState(null);
   const [bannerDismissed, setBannerDismissed] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const location = useLocation();
+
+  const navItems = NAV_ITEMS.filter((item) => {
+    if (item.owner) return Boolean(ctx.user?.site_owner);
+    if (item.auth) return Boolean(ctx.user);
+    return true;
+  });
+  // Everything that isn't pinned to the phone bar goes in the sheet --
+  // including, deliberately, whichever page you're currently on, so the
+  // "More" button can show an active state instead of the viewer losing
+  // all sense of where they are.
+  const overflowItems = navItems.filter((item) => !item.primary);
+  const overflowActive = overflowItems.some((item) => item.to !== "/" && location.pathname.startsWith(item.to));
+
+  // Any navigation closes the sheet -- without this it stays open on top
+  // of the page it just sent you to.
+  useEffect(() => { setMoreOpen(false); }, [location.pathname]);
+
+  // ─── Does the nav actually fit? ──────────────────────────────────────
+  // .primary-nav has `overflow-x: auto`, so when it doesn't fit it simply
+  // clips -- the last destination vanishes behind the account controls
+  // with no scrollbar and no hint anything is there. (Seen at 1360px:
+  // "My Other Projects" cut mid-word.) A fixed breakpoint can't decide
+  // this, because the item count isn't fixed: a signed-out visitor has
+  // seven destinations and a signed-in owner has twelve, so any width
+  // that's comfortable for one is wrong for the other.
+  //
+  // So measure. With labels shown, is the content wider than the track?
+  // If so, drop to icons only (names stay available via title= and to a
+  // screen reader). No feedback loop: the nav's width comes from the
+  // topbar's `1fr` grid track, so shrinking its contents never changes
+  // its own box, which is what the observer watches.
+  const navRef = useRef(null);
+  const [navCompact, setNavCompact] = useState(false);
+  const measureNav = useCallback(() => {
+    const nav = navRef.current;
+    if (!nav) return;
+    // Measure uncompacted, always: otherwise the nav could never
+    // discover that it has room to show its labels again.
+    nav.classList.remove("nav-compact");
+    const overflows = nav.scrollWidth > nav.clientWidth + 1;
+    setNavCompact(overflows);
+    if (overflows) nav.classList.add("nav-compact");
+  }, []);
+
+  // Layout effect, not a plain one: measuring after paint would show one
+  // frame of clipped nav on every load.
+  useLayoutEffect(() => {
+    measureNav();
+    const nav = navRef.current;
+    if (!nav || typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", measureNav);
+      return () => window.removeEventListener("resize", measureNav);
+    }
+    const observer = new ResizeObserver(measureNav);
+    observer.observe(nav);
+    return () => observer.disconnect();
+  }, [measureNav, navItems.length]);
 
   useLiveRefresh(async () => {
     try {
@@ -103,21 +187,41 @@ export function Shell({ ctx, children, className = "", style }) {
             <small>Curated Media Deck</small>
           </span>
         </Link>
-        <nav className="primary-nav" aria-label="Main">
-          <NavItem to="/" icon={Home} label="Discover" />
-          <NavItem to="/trending" icon={TrendingUp} label="Trending" />
-          <NavItem to="/collections" icon={Folder} label="Collections" />
-          <NavItem to="/users" icon={Users} label="Users" />
-          <NavItem to="/following" icon={Sparkles} label="Following" />
-          <NavItem to="/liked" icon={Heart} label="Liked" />
-          {ctx.user ? <NavItem to="/friends" icon={UserPlus} label="Friends" /> : null}
-          {ctx.user ? <NavItem to="/messages" icon={MessageCircle} label="Messages" /> : null}
-          {ctx.user ? <NavItem to="/studio" icon={Grid3X3} label="Studio" /> : null}
-          {ctx.user ? <NavItem to="/upload" icon={Upload} label="Upload" accent /> : null}
-          {ctx.user?.site_owner ? <NavItem to="/admin" icon={ShieldAlert} label="Admin" /> : null}
-          <NavItem to="/other-projects" icon={Rocket} label="My Other Projects" />
+        <nav className={`primary-nav${navCompact ? " nav-compact" : ""}`} aria-label="Main" ref={navRef}>
+          {navItems.map((item) => (
+            <NavItem
+              key={item.to}
+              to={item.to}
+              icon={item.icon}
+              label={item.label}
+              accent={item.accent}
+              // Hidden by CSS below the breakpoint rather than unmounted:
+              // the desktop nav wants every item, and swapping the list
+              // on a resize would remount the whole bar.
+              className={item.primary ? "" : "nav-item-overflow"}
+            />
+          ))}
+          <button
+            type="button"
+            className={`nav-item nav-item-more${overflowActive ? " active" : ""}`}
+            onClick={() => setMoreOpen((value) => !value)}
+            aria-expanded={moreOpen}
+            aria-label="More navigation"
+          >
+            <MoreHorizontal size={18} />
+            <span>More</span>
+          </button>
         </nav>
         <div className="account-actions">
+          {/* Search had no entry point anywhere in the chrome before
+              this. A real field on a wide screen, and the same palette
+              behind an icon where a field won't fit -- both open the one
+              command palette rather than two divergent search UIs. */}
+          <button type="button" className="topbar-search" onClick={ctx.openCommandPalette} title="Search (Ctrl+K)">
+            <SearchIcon size={16} />
+            <span className="topbar-search-label">Search</span>
+            <kbd>{typeof navigator !== "undefined" && navigator.platform?.includes("Mac") ? "⌘K" : "Ctrl K"}</kbd>
+          </button>
           <span className={`health-pill ${liveOk ? "is-live" : ""}`} title={telegram?.detail || ""}>{healthText}</span>
           <ThemeToggle quickTheme={ctx.quickTheme} onCycle={ctx.cycleTheme} />
           <NotificationBell ctx={ctx} />
@@ -144,6 +248,19 @@ export function Shell({ ctx, children, className = "", style }) {
           )}
         </div>
       </header>
+      {moreOpen ? (
+        <>
+          <div className="nav-more-scrim" role="presentation" onClick={() => setMoreOpen(false)} />
+          <div className="nav-more-sheet" role="menu" aria-label="More navigation">
+            {overflowItems.map((item) => (
+              <NavLink key={item.to} className="nav-more-item" to={item.to} role="menuitem" onClick={() => setMoreOpen(false)}>
+                <item.icon size={18} />
+                <span>{item.label}</span>
+              </NavLink>
+            ))}
+          </div>
+        </>
+      ) : null}
       <main className="main-stage">{children}</main>
       <footer className="site-footer">
         <span>Nyxframe // HeavenlyXenusVR</span>
@@ -153,16 +270,19 @@ export function Shell({ ctx, children, className = "", style }) {
   );
 }
 
-function NavItem({ to, icon: Icon, label, accent = false }) {
+function NavItem({ to, icon: Icon, label, accent = false, className = "" }) {
   return (
     <NavLink
-      className={({ isActive }) => `nav-item ${isActive ? "active" : ""} ${accent ? "accent liquid-glass" : ""}`}
+      className={({ isActive }) => `nav-item ${isActive ? "active" : ""} ${accent ? "accent liquid-glass" : ""} ${className}`}
       to={to}
       end={to === "/"}
       onPointerMove={accent ? glassPointerMove : undefined}
+      // Carries the name when the label is visually hidden at
+      // icon-only widths (see the 1181-1400px rule in styles.css).
+      title={label}
     >
       <Icon size={18} />
-      <span>{label}</span>
+      <span className="nav-item-label">{label}</span>
     </NavLink>
   );
 }

@@ -10090,4 +10090,20 @@ function M.start_deleted_media_purge()
   end)
 end
 
+-- Internals shared with src/video_extras.lua (seek sprites, captions).
+--
+-- ONE table assignment, not a handful of exported locals, because this
+-- chunk is at LuaJIT's 200-local ceiling (see the notes at the top of
+-- this file) -- `M.x = <existing local>` costs no new slot, a `local
+-- exported = {...}` would have cost the last one. video_extras requires
+-- this module lazily, from inside its own functions, so the two files
+-- can reference each other without a load-order cycle.
+M._video_extras_api = {
+  check_access = hls_check_access,
+  variant_dir = hls_variant_dir,
+  variant_ready = hls_variant_ready,
+  digest_seed = media_content_digest_seed,
+  settings = function() return M.settings end,
+}
+
 return M

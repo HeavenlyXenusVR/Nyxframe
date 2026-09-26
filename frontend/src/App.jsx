@@ -4,6 +4,8 @@ import { apiFetch, cachedApiFetch, clearApiCache, forceRefreshRemoteOrigin, pref
 import { Shell } from "./components/Shell.jsx";
 import { BackgroundMusicPlayer } from "./components/BackgroundMusicPlayer.jsx";
 import { Lightbox } from "./components/Lightbox.jsx";
+import { CommandPalette } from "./components/CommandPalette.jsx";
+import { ScrollManager } from "./components/ScrollManager.jsx";
 import { NotFound } from "./components/ui.jsx";
 import { DEFAULT_SETTINGS, PAGE_SIZE, setRuntimeMaxUploadBytes } from "./config.js";
 import { useLiveRefresh } from "./hooks/useLiveRefresh.js";
@@ -19,6 +21,7 @@ import { MediaDetailPage } from "./pages/MediaDetailPage.jsx";
 import { MessagesPage } from "./pages/MessagesPage.jsx";
 import { OtherProjectsPage } from "./pages/OtherProjectsPage.jsx";
 import { ProfilePage } from "./pages/ProfilePage.jsx";
+import { SearchPage } from "./pages/SearchPage.jsx";
 import { SettingsPage } from "./pages/SettingsPage.jsx";
 import { SimilarMediaPage } from "./pages/SimilarMediaPage.jsx";
 import { StudioPage } from "./pages/StudioPage.jsx";
@@ -368,6 +371,29 @@ function App() {
     [baseSettings, quickTheme],
   );
 
+  // ─── Command palette ──────────────────────────────────────────────────
+  // Owned here, not in Shell, because two very different things open it:
+  // the global Ctrl/Cmd+K accelerator, and the topbar's search affordance
+  // (which on a phone is the ONLY search entry point, since the field
+  // itself doesn't fit). Both funnel through ctx.
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const openCommandPalette = useCallback(() => setPaletteOpen(true), []);
+  const closeCommandPalette = useCallback(() => setPaletteOpen(false), []);
+
+  useEffect(() => {
+    function onKey(event) {
+      if (event.key !== "k" && event.key !== "K") return;
+      if (!event.metaKey && !event.ctrlKey) return;
+      // Cmd+K is unclaimed in browsers; Ctrl+K focuses the address bar in
+      // Firefox/Chrome, which is exactly the gesture being replaced here,
+      // so taking it over is the point rather than a collision.
+      event.preventDefault();
+      setPaletteOpen((value) => !value);
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, []);
+
   const ctx = useMemo(() => ({
     token,
     user,
@@ -384,7 +410,8 @@ function App() {
     closeLightbox,
     quickTheme,
     cycleTheme,
-  }), [closeLightbox, cycleTheme, effectiveSettings, lightbox, loginWith, logout, lookups, openLightbox, quickTheme, refreshLookups, refreshMe, setSessionUser, showToast, token, user]);
+    openCommandPalette,
+  }), [closeLightbox, cycleTheme, effectiveSettings, lightbox, loginWith, logout, lookups, openCommandPalette, openLightbox, quickTheme, refreshLookups, refreshMe, setSessionUser, showToast, token, user]);
 
   return (
     <Shell ctx={ctx} className={galleryClassName(ctx.settings)} style={galleryStyle(ctx.settings)}>
@@ -396,6 +423,8 @@ function App() {
           affect what anyone else sees, so there's no cross-user styling/
           exfiltration surface to worry about here. */}
       {effectiveSettings.custom_css ? <style>{effectiveSettings.custom_css.slice(0, 4000)}</style> : null}
+      <ScrollManager />
+      <CommandPalette ctx={ctx} open={paletteOpen} onClose={closeCommandPalette} />
       <Routes>
         <Route path="/" element={<DiscoverPage ctx={ctx} />} />
         <Route path="/trending" element={<TrendingPage ctx={ctx} />} />
@@ -412,6 +441,7 @@ function App() {
         <Route path="/studio" element={<StudioPage ctx={ctx} />} />
         <Route path="/profile" element={ctx.user ? <Navigate to={`/users/${ctx.user.username}`} replace /> : <Navigate to="/login" replace />} />
         <Route path="/upload" element={<UploadPage ctx={ctx} />} />
+        <Route path="/search" element={<SearchPage ctx={ctx} />} />
         <Route path="/settings" element={<SettingsPage ctx={ctx} />} />
         <Route path="/admin" element={<AdminPage ctx={ctx} />} />
         <Route path="/other-projects" element={<OtherProjectsPage ctx={ctx} />} />

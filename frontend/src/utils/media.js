@@ -229,6 +229,15 @@ export function videoQualityUrl(item, quality = "original") {
     const parsed = new URL(item.url, window.location.origin);
     if (!parsed.pathname.endsWith("/file")) return item.url;
     const base = parsed.pathname.slice(0, -"/file".length);
+    // "auto" is the one quality that points at the MASTER playlist and
+    // lets the player adapt across the whole ladder. It is offered only
+    // on the hls.js path (see VideoPlayer.jsx's `abrAvailable`), where
+    // the starting rendition can be pinned so a cold connection can't
+    // open on 144p -- the failure that got ABR reverted the first time.
+    if (quality === "auto") {
+      parsed.pathname = `${base}/hls/master.m3u8`;
+      return absolute ? parsed.toString() : parsed.pathname + parsed.search + parsed.hash;
+    }
     const rendition = (!quality || quality === "original" || quality === "high") ? "original" : quality;
     parsed.pathname = `${base}/hls/${rendition}/playlist.m3u8`;
     return absolute ? parsed.toString() : parsed.pathname + parsed.search + parsed.hash;

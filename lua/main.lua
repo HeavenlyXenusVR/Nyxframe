@@ -7,6 +7,7 @@ local httpd = require("httpd")
 local db = require("db")
 local config = require("config")
 local routes = require("routes")
+local video_extras = require("video_extras")
 local static = require("static")
 local pages_auth = require("pages_auth")
 local pages_admin = require("pages_admin")
@@ -157,8 +158,21 @@ httpd.route("GET", "/api/media/:media_id/hls/master.m3u8", routes.serve_hls_mast
 -- otherwise greedily match the literal "playlist.m3u8" too (same
 -- first-match-wins ordering trap noted above for /api/media/:media_id).
 httpd.route("GET", "/api/media/:media_id/hls/:quality/playlist.m3u8", routes.serve_hls_playlist)
+httpd.route("GET", "/api/media/:media_id/hls/:quality/master.m3u8", video_extras.serve_quality_master)
 httpd.route("GET", "/api/media/:media_id/hls/:quality/:segment", routes.serve_hls_segment)
 httpd.route("GET", "/api/media/:media_id/download", routes.download_media)
+
+-- Optional per-video extras: seek-preview sprites and auto-generated
+-- captions (src/video_extras.lua). Registered here rather than in
+-- routes.lua because that file is at LuaJIT's 200-local ceiling -- see
+-- its `_video_extras_api` comment. "/captions/subs.m3u8" exists only for
+-- AVPlayer, which unlike a browser cannot side-load a subtitle file and
+-- can only receive one through the HLS manifest.
+httpd.route("GET", "/api/media/:media_id/playback-extras", video_extras.playback_extras)
+httpd.route("GET", "/api/media/:media_id/sprite.jpg", video_extras.serve_sprite_sheet)
+httpd.route("GET", "/api/media/:media_id/sprite.vtt", video_extras.serve_sprite_vtt)
+httpd.route("GET", "/api/media/:media_id/captions/en.vtt", video_extras.serve_captions)
+httpd.route("GET", "/api/media/:media_id/captions/subs.m3u8", video_extras.serve_captions_playlist)
 httpd.route("GET", "/api/users/:user_id/avatar", routes.serve_user_avatar)
 
 -- "My Other Projects" tab -- see routes.lua's download_latest_ipa doc
