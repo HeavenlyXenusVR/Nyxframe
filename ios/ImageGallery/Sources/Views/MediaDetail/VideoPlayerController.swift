@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreMedia
 import Foundation
 
 /// Owns a single `AVPlayer` for one media item so the inline viewer
@@ -12,6 +13,12 @@ import Foundation
 final class VideoPlayerController: ObservableObject {
     @Published private(set) var player: AVPlayer?
     @Published private(set) var errorMessage: String?
+    /// Non-nil while the "we picked up where you left off" chip should be
+    /// showing -- see `AuthenticatedVideoPlayer`. Set once, on the first
+    /// load of a session; a quality switch also restores a position but
+    /// that's the viewer's own current position, not a resume, and
+    /// announcing it would be noise.
+    @Published private(set) var resumedFrom: Double?
 
     private var statusObservation: NSKeyValueObservation?
     private var rateObservation: NSKeyValueObservation?
@@ -24,6 +31,35 @@ final class VideoPlayerController: ObservableObject {
     /// different rendition -- the URL, not the player, is the source of truth.
     private(set) var url: URL
     private let mediaId: Int
+    /// Reported with the playback telemetry on teardown. Previously
+    /// hard-coded to nil here while web reported it on every session, so
+    /// every iOS row in the telemetry table was missing the one dimension
+    /// that says which rendition the numbers describe.
+    private var quality: String
+    private let title: String
+    private let author: String?
+    private let artworkURL: URL?
+
+    /// Where to seek once the item reaches `.readyToPlay`: a stored resume
+    /// position on a fresh load, or the viewer's current position across a
+    /// quality switch. Seeking before that point is silently dropped on an
+    /// HLS asset, which is why this is deferred rather than applied at
+    /// attach time.
+    private var pendingSeek: Double?
+    /// A session resumes at most once; a later quality switch must not
+    /// re-apply a stale stored position on top of the live one.
+    private var hasConsideredResume = false
+    /// Plain mirrors of the current position/duration, maintained by the
+    /// periodic observer. `deinit` needs them and cannot touch
+    /// MainActor-isolated state -- same constraint (and same workaround)
+    /// as `hadFatalError` below.
+    private var lastKnownTime: Double = 0
+    private var lastKnownDuration: Double = 0
+    private var timeObserverToken: Any?
+    /// Held as a plain property so the periodic observer can be detached
+    /// in `deinit`, where the `@Published` `player` is unreachable.
+    private var observedPlayer: AVPlayer?
+    private var endObserver: NSObjectProtocol?
 
     // ─── Playback telemetry (reportMediaPlayback on deinit) ─────────────────
     // Mirrors VideoPlayer.jsx's playbackStatsRef -- accumulated for this
@@ -47,19 +83,32 @@ final class VideoPlayerController: ObservableObject {
     /// context" at exactly this read.
     private var hadFatalError = false
 
-    init(url: URL, mediaId: Int) {
+    init(url: URL, mediaId: Int, quality: String = "original", title: String = "Nyxframe video", author: String? = nil, artworkURL: URL? = nil) {
         self.url = url
         self.mediaId = mediaId
+        self.quality = quality
+        self.title = title
+        self.author = author
+        self.artworkURL = artworkURL
     }
 
-    func setURL(_ newURL: URL) {
+    func setURL(_ newURL: URL, quality newQuality: String? = nil) {
+        if let newQuality { quality = newQuality }
         guard newURL != url else { return }
         let wasPlaying = player?.timeControlStatus == .playing
+        // Carry the position across the switch. Without this, picking a
+        // different rendition restarted the video from zero -- web has
+        // preserved it since the quality menu existed (VideoPlayer.jsx's
+        // `pendingRestoreRef`), and losing your place is a much bigger
+        // deal than the rendition you were changing.
+        let position = player?.currentTime().seconds ?? 0
         url = newURL
         retryAttempt = 0
         errorMessage = nil
         hadFatalError = false
+        teardownPlayerObservers()
         player = nil
+        pendingSeek = (position.isFinite && position > 1) ? position : nil
         startPlayback(autoplay: wasPlaying)
     }
 
@@ -79,12 +128,35 @@ final class VideoPlayerController: ObservableObject {
         startPlayback(autoplay: true)
     }
 
+    /// The undo half of auto-resume: jump back to the top and forget the
+    /// stored position, so the next visit starts clean too. Mirrors the
+    /// web player's "Start over" chip button.
+    func startOver() {
+        resumedFrom = nil
+        pendingSeek = nil
+        PlaybackPreferences.clearResumePosition(mediaId: mediaId)
+        lastKnownTime = 0
+        player?.seek(to: .zero)
+        player?.play()
+    }
+
+    func dismissResumeNotice() {
+        resumedFrom = nil
+    }
+
     private func startPlayback(autoplay: Bool) {
-        statusObservation?.invalidate()
-        rateObservation?.invalidate()
-        likelyToKeepUpObservation?.invalidate()
-        if let stallObserver { NotificationCenter.default.removeObserver(stallObserver) }
+        teardownPlayerObservers()
         preflightTask?.cancel()
+        // Resume where this device left off, considered once per session
+        // so a later quality switch (which sets its own pendingSeek from
+        // the live position) can't be overridden by a stale stored one.
+        if !hasConsideredResume {
+            hasConsideredResume = true
+            if pendingSeek == nil, let stored = PlaybackPreferences.resumePosition(mediaId: mediaId) {
+                pendingSeek = stored
+                resumedFrom = stored
+            }
+        }
         // Time-to-first-frame only means something for the very first load
         // of a playback session -- setURL's own quality-switch path (see
         // its doc comment) restarts playback too, but that's a rendition
@@ -183,11 +255,44 @@ final class VideoPlayerController: ObservableObject {
     private func attachPlayer(headers: [String: String], autoplay: Bool) {
         let asset = AVURLAsset(url: url, options: ["AVURLAssetHTTPHeaderFieldsKey": headers])
         let item = AVPlayerItem(asset: asset)
+        // The same reasoning as the web player's raised hls.js
+        // `maxBufferLength`: a cold rendition is often being encoded
+        // barely ahead of playback, so the default (AVPlayer picks its
+        // own, typically a handful of seconds) leaves almost no runway
+        // and turns one slow segment fetch into a visible stall. Buffering
+        // further ahead absorbs it. Not unlimited -- a large value here
+        // costs memory and up-front bandwidth on a rendition the viewer
+        // may abandon after ten seconds.
+        item.preferredForwardBufferDuration = 90
         statusObservation = item.observe(\.status, options: [.new]) { [weak self] observedItem, _ in
-            guard observedItem.status == .failed else { return }
+            let status = observedItem.status
             let failure = observedItem.error
             DispatchQueue.main.async {
-                self?.handleFailure(failure)
+                guard let self else { return }
+                switch status {
+                case .failed:
+                    self.handleFailure(failure)
+                case .readyToPlay:
+                    // Seeks issued before this point are silently dropped
+                    // on an HLS asset, which is why both the resume
+                    // position and the quality-switch position wait here
+                    // rather than being applied at attach time.
+                    self.applyPendingSeek()
+                default:
+                    break
+                }
+            }
+        }
+        // Watched to the end: nothing left to resume, and keeping the
+        // entry would make the next visit open with a pointless "resumed
+        // at 9:52" of a 10:00 video.
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main
+        ) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                PlaybackPreferences.clearResumePosition(mediaId: self.mediaId)
+                self.lastKnownTime = 0
             }
         }
         let newPlayer = AVPlayer(playerItem: item)
@@ -197,6 +302,16 @@ final class VideoPlayerController: ObservableObject {
         // not just our own startPlayback()/pause() methods.
         rateObservation = newPlayer.observe(\.rate, options: [.new]) { [weak self] player, _ in
             NotificationCenter.default.post(name: .nyxframeVideoPlaybackChanged, object: nil, userInfo: ["playing": player.rate > 0])
+            // Keep the lock screen's play/pause glyph honest, including
+            // when the change came from AVKit's own transport controls or
+            // from a stall -- the periodic observer alone would leave it
+            // wrong for up to five seconds.
+            let rate = player.rate
+            let elapsed = player.currentTime().seconds
+            DispatchQueue.main.async {
+                guard let self, elapsed.isFinite else { return }
+                NowPlayingCenter.shared.update(owner: self, elapsed: elapsed, duration: self.lastKnownDuration, rate: rate)
+            }
             guard player.rate > 0, let self else { return }
             DispatchQueue.main.async {
                 guard !self.hasPlayedOnce else { return }
@@ -233,7 +348,79 @@ final class VideoPlayerController: ObservableObject {
             }
         }
         player = newPlayer
+        observedPlayer = newPlayer
+        attachTimeObserver(to: newPlayer)
+        NowPlayingCenter.shared.begin(
+            owner: self,
+            title: title,
+            artist: author,
+            artworkURL: artworkURL,
+            handlers: NowPlayingCenter.Handlers(
+                play: { [weak self] in self?.player?.play() },
+                pause: { [weak self] in self?.player?.pause() },
+                seek: { [weak self] position in
+                    self?.player?.seek(to: CMTime(seconds: position, preferredTimescale: 600))
+                },
+                skip: { [weak self] offset in
+                    guard let player = self?.player else { return }
+                    let target = max(0, player.currentTime().seconds + offset)
+                    player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
+                }
+            )
+        )
         if autoplay { newPlayer.play() }
+    }
+
+    private func applyPendingSeek() {
+        guard let target = pendingSeek, let player else { return }
+        pendingSeek = nil
+        // Default tolerances on purpose: an exact seek on HLS has to fetch
+        // and decode from the preceding keyframe, and a second of slop is
+        // invisible next to the wait it saves.
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 600))
+    }
+
+    /// Five seconds: frequent enough that navigating away loses at most
+    /// that much of the viewer's place, rare enough that the UserDefaults
+    /// write behind it is inconsequential.
+    private func attachTimeObserver(to player: AVPlayer) {
+        timeObserverToken = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 5, preferredTimescale: 1), queue: .main
+        ) { [weak self] time in
+            // `queue: .main` is a thread guarantee, not MainActor
+            // isolation as the compiler sees it -- hop explicitly, same as
+            // every other cross-actor callback in this file.
+            let seconds = time.seconds
+            DispatchQueue.main.async { self?.handleTimeUpdate(seconds: seconds) }
+        }
+    }
+
+    private func detachTimeObserver() {
+        if let timeObserverToken, let observedPlayer {
+            observedPlayer.removeTimeObserver(timeObserverToken)
+        }
+        timeObserverToken = nil
+        observedPlayer = nil
+    }
+
+    private func handleTimeUpdate(seconds: Double) {
+        guard seconds.isFinite, let player else { return }
+        lastKnownTime = seconds
+        let duration = player.currentItem?.duration.seconds ?? .nan
+        if duration.isFinite, duration > 0 { lastKnownDuration = duration }
+        PlaybackPreferences.saveResumePosition(mediaId: mediaId, time: seconds, duration: lastKnownDuration)
+        NowPlayingCenter.shared.update(owner: self, elapsed: seconds, duration: lastKnownDuration, rate: player.rate)
+    }
+
+    private func teardownPlayerObservers() {
+        statusObservation?.invalidate()
+        rateObservation?.invalidate()
+        likelyToKeepUpObservation?.invalidate()
+        if let stallObserver { NotificationCenter.default.removeObserver(stallObserver) }
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+        stallObserver = nil
+        endObserver = nil
+        detachTimeObserver()
     }
 
     private func handleFailure(_ error: Error?) {
@@ -274,7 +461,26 @@ final class VideoPlayerController: ObservableObject {
         rateObservation?.invalidate()
         likelyToKeepUpObservation?.invalidate()
         if let stallObserver { NotificationCenter.default.removeObserver(stallObserver) }
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+        if let timeObserverToken, let observedPlayer { observedPlayer.removeTimeObserver(timeObserverToken) }
         preflightTask?.cancel()
+
+        // Navigating away mid-video is the most common way a session
+        // ends, and the periodic save can be up to five seconds stale by
+        // then -- flush the last known position so "resume" lands where
+        // the viewer actually stopped. Reads the plain mirrors, not the
+        // player: `deinit` is nonisolated and may not touch the
+        // MainActor-isolated `@Published` properties.
+        PlaybackPreferences.saveResumePosition(mediaId: mediaId, time: lastKnownTime, duration: lastKnownDuration)
+
+        // Hand the lock screen back. Keyed by identity rather than
+        // clearing unconditionally: this controller can outlive its
+        // usefulness and be deallocated *after* the next video's
+        // controller has already taken the session over, and wiping that
+        // one's metadata would leave the lock screen blank mid-playback.
+        let ownerId = ObjectIdentifier(self)
+        Task { @MainActor in NowPlayingCenter.shared.end(ownerId: ownerId) }
+
         // Unconditional, not conditioned on prior playback state -- mirrors
         // web's identical unmount-safety comment on VideoPlayer.jsx: this
         // controller being deallocated mid-playback (navigating away) would
@@ -290,7 +496,7 @@ final class VideoPlayerController: ObservableObject {
         DiagnosticsReporter.reportMediaPlayback(
             mediaId: mediaId,
             outcome: hadFatalError ? "error" : hasPlayedOnce ? "played" : "abandoned",
-            quality: nil, timeToFirstFrameMs: firstFrameMs,
+            quality: quality, timeToFirstFrameMs: firstFrameMs,
             stallCount: stallCount, stallTotalMs: stallTotalMs, retryCount: retryAttempt
         )
     }

@@ -32,11 +32,65 @@ struct AuthenticatedVideoPlayer: View {
             } else if let player = controller.player {
                 VideoPlayer(player: player)
                     .overlay(alignment: .topTrailing) { watermark }
+                    .overlay(alignment: .topLeading) { resumeChip }
             } else {
                 Color.black.overlay(ProgressView())
             }
         }
         .onAppear { controller.startIfNeeded() }
+    }
+
+    /// Auto-resuming silently is disorienting ("why did this start in the
+    /// middle?") and a blocking "Resume?" prompt in front of the video is
+    /// worse, so this resumes immediately and offers one tap to undo --
+    /// the same bargain the web player's `.vp-resume-chip` strikes.
+    /// Bottom-leading would collide with AVKit's transport controls, so
+    /// it sits opposite the watermark.
+    @ViewBuilder
+    private var resumeChip: some View {
+        if let resumedFrom = controller.resumedFrom {
+            HStack(spacing: 8) {
+                Text("Resumed from \(Self.timestamp(resumedFrom))")
+                    .font(.caption2.weight(.semibold))
+                Button {
+                    controller.startOver()
+                } label: {
+                    Label("Start over", systemImage: "arrow.counterclockwise")
+                        .font(.caption2.weight(.semibold))
+                        .labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 4)
+                .background(Color.accentColor.opacity(0.35), in: Capsule())
+            }
+            .padding(.leading, 12)
+            .padding(.trailing, 5)
+            .padding(.vertical, 5)
+            .foregroundStyle(.white)
+            .background(.black.opacity(0.55), in: Capsule())
+            .padding(12)
+            .transition(.opacity)
+            // Self-dismissing: it is an acknowledgement, not a control,
+            // and leaving it parked over the video would be worse than
+            // never showing it. Keyed on the value so a later resume
+            // (a quality switch reattaching, say) restarts the timer
+            // rather than inheriting the first one's remaining time.
+            .task(id: resumedFrom) {
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                guard !Task.isCancelled else { return }
+                controller.dismissResumeNotice()
+            }
+        }
+    }
+
+    private static func timestamp(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let secs = total % 60
+        if hours > 0 { return String(format: "%d:%02d:%02d", hours, minutes, secs) }
+        return String(format: "%d:%02d", minutes, secs)
     }
 
     /// Matches the web player's `.vp-watermark` (VideoPlayer.jsx): the same

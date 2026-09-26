@@ -11,7 +11,11 @@ struct MediaDetailView: View {
     @State private var originalURL: URL?
     @State private var showingOriginalInApp = false
     @State private var videoController: VideoPlayerController?
-    @State private var videoQuality = "original"
+    /// Seeded from this device's own last explicit pick rather than
+    /// always "original": someone on a capped connection who chooses 480p
+    /// means it for their connection, not for one post. Web does the same
+    /// (MediaDetailPage's `getPlayerPref("quality", ...)`).
+    @State private var videoQuality = PlaybackPreferences.quality
 
     private static let qualityOptions: [(String, String)] = [
         ("original", "Original"),
@@ -112,7 +116,7 @@ struct MediaDetailView: View {
             }
         }
         .onChange(of: viewModel.media?.id) { _ in
-            videoQuality = "original"
+            videoQuality = PlaybackPreferences.quality
             videoController = nil
             setUpVideoControllerIfNeeded()
         }
@@ -168,14 +172,30 @@ struct MediaDetailView: View {
     private func setUpVideoControllerIfNeeded() {
         guard videoController == nil, let media = viewModel.media, media.isVideo else { return }
         guard let url = videoQualityURL(media, quality: videoQuality) else { return }
-        videoController = VideoPlayerController(url: url, mediaId: media.id)
+        videoController = VideoPlayerController(
+            url: url,
+            mediaId: media.id,
+            quality: videoQuality,
+            title: media.title?.nilIfEmpty ?? "Nyxframe video",
+            author: media.displayName ?? media.username,
+            // Doubles as the lock screen's artwork. The thumbnail, not
+            // the original: this is displayed at a few hundred points and
+            // gets fetched on every video, so the multi-MB source would
+            // be pure waste.
+            artworkURL: media.thumbUrl.flatMap(URL.init(string:))
+        )
     }
 
     private func changeQuality(_ quality: String, media: MediaItem) {
         guard quality != videoQuality else { return }
         videoQuality = quality
+        // Every call here comes from the quality menu, i.e. is a
+        // deliberate choice -- the player never picks a rendition for
+        // itself on iOS the way web's codec fallback does, so there is no
+        // automatic switch that could pollute this.
+        PlaybackPreferences.quality = quality
         guard let controller = videoController, let url = videoQualityURL(media, quality: quality) else { return }
-        controller.setURL(url)
+        controller.setURL(url, quality: quality)
     }
 
     private var qualityMenu: some View {
