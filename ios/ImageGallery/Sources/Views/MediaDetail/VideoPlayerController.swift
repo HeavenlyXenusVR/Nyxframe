@@ -30,6 +30,20 @@ final class VideoPlayerController: ObservableObject {
     /// Set (and playback restarted) whenever the quality selector picks a
     /// different rendition -- the URL, not the player, is the source of truth.
     private(set) var url: URL
+    /// What the readiness preflight below should poll, when that isn't
+    /// the playback URL itself.
+    ///
+    /// With captions available the player is handed a MASTER playlist
+    /// (the only way AVPlayer can receive subtitles -- see
+    /// MediaDetailView.videoQualityURL), and a master is generated
+    /// instantly from a template: it answers 200 whether or not the
+    /// rendition underneath it has a single segment encoded yet. Polling
+    /// it would therefore always succeed immediately and hand AVPlayer a
+    /// manifest pointing at a variant that still 503s -- silently
+    /// reintroducing exactly the indefinite stall the preflight exists to
+    /// prevent. So the caller passes the variant playlist here and the
+    /// wait happens against the document that actually reports progress.
+    private(set) var preflightURL: URL?
     private let mediaId: Int
     /// Reported with the playback telemetry on teardown. Previously
     /// hard-coded to nil here while web reported it on every session, so
@@ -83,8 +97,17 @@ final class VideoPlayerController: ObservableObject {
     /// context" at exactly this read.
     private var hadFatalError = false
 
-    init(url: URL, mediaId: Int, quality: String = "original", title: String = "Nyxframe video", author: String? = nil, artworkURL: URL? = nil) {
+    init(
+        url: URL,
+        mediaId: Int,
+        quality: String = "original",
+        title: String = "Nyxframe video",
+        author: String? = nil,
+        artworkURL: URL? = nil,
+        preflightURL: URL? = nil
+    ) {
         self.url = url
+        self.preflightURL = preflightURL
         self.mediaId = mediaId
         self.quality = quality
         self.title = title
@@ -92,8 +115,9 @@ final class VideoPlayerController: ObservableObject {
         self.artworkURL = artworkURL
     }
 
-    func setURL(_ newURL: URL, quality newQuality: String? = nil) {
+    func setURL(_ newURL: URL, quality newQuality: String? = nil, preflightURL newPreflightURL: URL? = nil) {
         if let newQuality { quality = newQuality }
+        preflightURL = newPreflightURL
         guard newURL != url else { return }
         let wasPlaying = player?.timeControlStatus == .playing
         // Carry the position across the switch. Without this, picking a
@@ -207,7 +231,8 @@ final class VideoPlayerController: ObservableObject {
         // each, ~112s) rather than inventing a shorter one for iOS alone.
         preflightTask = Task { [weak self] in
             guard let self else { return }
-            var request = URLRequest(url: url)
+            let probeURL = preflightURL ?? url
+            var request = URLRequest(url: probeURL)
             for (key, value) in headers { request.setValue(value, forHTTPHeaderField: key) }
 
             let deadline = Date().addingTimeInterval(180)
@@ -236,7 +261,11 @@ final class VideoPlayerController: ObservableObject {
                     // itself -- matters for private/adult-gated videos,
                     // where the redirect target needs the same Bearer token
                     // the original request carried.
-                    resolvedURL = http?.url
+                    // Only adopt the resolved URL when the probe WAS the
+                    // playback URL. When they differ, this resolved a
+                    // variant playlist and handing it to AVPlayer would
+                    // throw away the master (and with it the subtitles).
+                    if probeURL == self.url { resolvedURL = http?.url }
                     break
                 } catch {
                     break // Let AVPlayer's own load surface the real error for anything else.

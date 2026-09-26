@@ -40,10 +40,15 @@ struct FeedView: View {
         .navigationTitle("Discover")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                NavigationLink(destination: UserSearchView()) {
-                    Image(systemName: "person.crop.circle.badge.plus")
+                // Was a people-only "Find People" screen. Media search
+                // lived separately, in the field below this toolbar, and
+                // neither could answer the other's question -- the same
+                // split the web app had before /search unified it. One
+                // destination now covers both.
+                NavigationLink(destination: SearchView()) {
+                    Image(systemName: "magnifyingglass")
                 }
-                .accessibilityLabel("Find people")
+                .accessibilityLabel("Search")
             }
             ToolbarItem(placement: .topBarLeading) {
                 NavigationLink(destination: CollectionsListView()) {

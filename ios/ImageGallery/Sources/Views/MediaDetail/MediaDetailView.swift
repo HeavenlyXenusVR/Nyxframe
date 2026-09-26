@@ -16,6 +16,10 @@ struct MediaDetailView: View {
     /// means it for their connection, not for one post. Web does the same
     /// (MediaDetailPage's `getPlayerPref("quality", ...)`).
     @State private var videoQuality = PlaybackPreferences.quality
+    /// True once the backend reports a generated caption track for this
+    /// post, which changes WHICH manifest the player is pointed at -- see
+    /// `videoQualityURL`.
+    @State private var hasCaptions = false
 
     private static let qualityOptions: [(String, String)] = [
         ("original", "Original"),
@@ -81,6 +85,7 @@ struct MediaDetailView: View {
         .task {
             await viewModel.load()
             setUpVideoControllerIfNeeded()
+            if let media = viewModel.media { await loadPlaybackExtras(for: media) }
         }
         .sheet(isPresented: $showingReport) { ReportSheet(viewModel: viewModel) }
         .sheet(isPresented: $showingEdit) { MediaEditSheet(viewModel: viewModel) }
@@ -117,8 +122,12 @@ struct MediaDetailView: View {
         }
         .onChange(of: viewModel.media?.id) { _ in
             videoQuality = PlaybackPreferences.quality
+            hasCaptions = false
             videoController = nil
             setUpVideoControllerIfNeeded()
+            if let media = viewModel.media {
+                Task { await loadPlaybackExtras(for: media) }
+            }
         }
         .onAppear { setUpVideoControllerIfNeeded() }
         .onDisappear { videoController?.pause() }
@@ -147,9 +156,58 @@ struct MediaDetailView: View {
         guard components.path.hasSuffix("/file") else { return nil }
         let base = String(components.path.dropLast("/file".count))
         let rendition = (quality == "original" || quality.isEmpty || quality == "high") ? "original" : quality
+        // With captions available, point at the per-quality MASTER rather
+        // than the rendition playlist. AVPlayer cannot side-load a
+        // subtitle file the way a browser can attach a <track> -- a
+        // subtitle rendition declared in a manifest is the only route it
+        // has -- and AVKit then surfaces its own caption button and
+        // honours the system's Closed Captions accessibility setting for
+        // free.
+        //
+        // This master wraps exactly ONE rendition (see
+        // video_extras.serve_quality_master), so it changes nothing about
+        // which video segments get fetched. That matters: the site-wide
+        // master.m3u8 offers real ABR across the whole ladder, and
+        // pointing iOS at THAT is what caused "original quality just
+        // loads forever" and was reverted -- AVPlayer picks a level from
+        // a bandwidth estimate it doesn't have yet on a cold connection.
+        // The explicit quality the viewer chose stays exactly as it is.
+        components.path = base + "/hls/\(rendition)/" + (hasCaptions ? "master.m3u8" : "playlist.m3u8")
+        components.queryItems = accessToken.map { [URLQueryItem(name: "access", value: $0)] }
+        return components.url
+    }
+
+    /// The rendition playlist for the same quality -- the document that
+    /// actually 503s while a transcode is cold, which is what the
+    /// controller's readiness preflight has to wait on. See
+    /// `VideoPlayerController.preflightURL`.
+    private func variantPlaylistURL(_ media: MediaItem, quality: String) -> URL? {
+        guard hasCaptions else { return nil }
+        guard let urlString = media.url, var components = URLComponents(string: urlString) else { return nil }
+        let accessToken = (components.queryItems ?? []).first { $0.name == "access" }?.value
+        guard components.path.hasSuffix("/file") else { return nil }
+        let base = String(components.path.dropLast("/file".count))
+        let rendition = (quality == "original" || quality.isEmpty || quality == "high") ? "original" : quality
         components.path = base + "/hls/\(rendition)/playlist.m3u8"
         components.queryItems = accessToken.map { [URLQueryItem(name: "access", value: $0)] }
         return components.url
+    }
+
+    /// Asks the backend whether this post has a caption track yet, and
+    /// starts generating one if not. Cheap, and deliberately fire and
+    /// forget: captions are a background nicety, so a failure here just
+    /// means the player keeps the manifest it already has.
+    private func loadPlaybackExtras(for media: MediaItem) async {
+        guard media.isVideo, !hasCaptions else { return }
+        guard let extras = try? await GalleryAPIClient.shared.playbackExtras(mediaId: media.id) else { return }
+        guard extras.captions?.status == "ready" else { return }
+        hasCaptions = true
+        // Re-point the live player at the captioned manifest. setURL
+        // carries the current position across (see VideoPlayerController),
+        // so this is invisible beyond the caption button appearing.
+        if let controller = videoController, let url = videoQualityURL(media, quality: videoQuality) {
+            controller.setURL(url, quality: videoQuality, preflightURL: variantPlaylistURL(media, quality: videoQuality))
+        }
     }
 
     // open_original_in_new_tab -- web's literal "new tab" framing doesn't
@@ -182,7 +240,8 @@ struct MediaDetailView: View {
             // the original: this is displayed at a few hundred points and
             // gets fetched on every video, so the multi-MB source would
             // be pure waste.
-            artworkURL: media.thumbUrl.flatMap(URL.init(string:))
+            artworkURL: media.thumbUrl.flatMap(URL.init(string:)),
+            preflightURL: variantPlaylistURL(media, quality: videoQuality)
         )
     }
 
@@ -195,7 +254,7 @@ struct MediaDetailView: View {
         // automatic switch that could pollute this.
         PlaybackPreferences.quality = quality
         guard let controller = videoController, let url = videoQualityURL(media, quality: quality) else { return }
-        controller.setURL(url, quality: quality)
+        controller.setURL(url, quality: quality, preflightURL: variantPlaylistURL(media, quality: quality))
     }
 
     private var qualityMenu: some View {
