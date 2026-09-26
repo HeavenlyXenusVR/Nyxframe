@@ -167,7 +167,7 @@ struct FeedView: View {
                 .padding(.horizontal)
 
             if let errorMessage = viewModel.errorMessage {
-                Text(errorMessage).foregroundStyle(.red).padding(.horizontal)
+                InlineErrorView(message: errorMessage) { await viewModel.loadInitial() }
             }
 
             if viewModel.isLoading && viewModel.items.isEmpty {
@@ -200,14 +200,38 @@ struct FeedView: View {
 
 /// `ContentUnavailableView` is iOS 17+; this app's deployment target is iOS 16,
 /// so a tiny compatibility shim covers the empty-state look on iOS 16 devices.
-struct ContentUnavailableCompat: View {
+/// `hint` and `action` were added for the same reason the web app's
+/// EmptyState grew them: an empty screen that only states the fact is a
+/// dead end, and the most common causes here (a filter, the shortest
+/// trending window, an account with nothing in it yet) all have an
+/// obvious next step the viewer can't otherwise find.
+struct ContentUnavailableCompat<Action: View>: View {
     let title: String
     let systemImage: String
+    var hint: String? = nil
+    @ViewBuilder var action: () -> Action
 
     var body: some View {
         VStack(spacing: 8) {
             Image(systemName: systemImage).font(.system(size: 40)).foregroundStyle(.secondary)
             Text(title).foregroundStyle(.secondary)
+            if let hint {
+                Text(hint)
+                    .font(.footnote)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 28)
+            }
+            action()
         }
+    }
+}
+
+/// The common case: a bare empty state with nothing to offer. Keeps
+/// every existing call site working unchanged, and makes `action` an
+/// `EmptyView`, which contributes no layout to the stack above.
+extension ContentUnavailableCompat where Action == EmptyView {
+    init(title: String, systemImage: String, hint: String? = nil) {
+        self.init(title: title, systemImage: systemImage, hint: hint) { EmptyView() }
     }
 }

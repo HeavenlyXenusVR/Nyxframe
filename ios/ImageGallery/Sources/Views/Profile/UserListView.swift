@@ -25,7 +25,9 @@ struct UserListView: View {
     var body: some View {
         List {
             if let errorMessage {
-                Text(errorMessage).foregroundStyle(.red)
+                InlineErrorView(message: errorMessage) { await load() }
+                    .listRowInsets(EdgeInsets())
+                    .listRowBackground(Color.clear)
             }
             ForEach(users) { user in
                 NavigationLink(destination: ProfileView(username: user.username)) {

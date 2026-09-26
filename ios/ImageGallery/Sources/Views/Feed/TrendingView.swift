@@ -25,7 +25,7 @@ struct TrendingView: View {
             }
 
             if let errorMessage {
-                Text(errorMessage).foregroundStyle(.red).padding()
+                InlineErrorView(message: errorMessage) { await load() }
             }
 
             LazyVGrid(columns: columns, spacing: Appearance.gridSpacing(session.currentUser?.userSettings?.columnGap)) {
@@ -39,8 +39,23 @@ struct TrendingView: View {
             .padding(.horizontal)
 
             if items.isEmpty && !isLoading {
-                ContentUnavailableCompat(title: "Nothing trending yet", systemImage: "flame")
-                    .padding(.top, 60)
+                // Same reasoning as the web page: the default window is
+                // the shortest one, so on a quiet week the usual way to
+                // land here is an empty screen while a wider window is
+                // full. Offer the widening rather than stating the fact.
+                ContentUnavailableCompat(
+                    title: "Nothing trending yet",
+                    systemImage: "flame",
+                    hint: days == 30
+                        ? "Nothing has picked up views or likes in this period."
+                        : "Nothing has picked up views or likes in this window."
+                ) {
+                    if days != 30 {
+                        Button("Look at the last 30 days") { days = 30 }
+                            .buttonStyle(.bordered)
+                    }
+                }
+                .padding(.top, 60)
             }
 
             LeaderboardSection()

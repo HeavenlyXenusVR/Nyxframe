@@ -61,7 +61,14 @@ struct StudioView: View {
             if viewModel.isLoading && viewModel.items.isEmpty {
                 ProgressView()
             } else if viewModel.items.isEmpty && !viewModel.isLoading {
-                ContentUnavailableCompat(title: "No uploads yet", systemImage: "photo.stack")
+                ContentUnavailableCompat(
+                    title: "No uploads yet",
+                    systemImage: "photo.stack",
+                    hint: "Posts you publish show up here, with their stats and owner controls."
+                ) {
+                    NavigationLink("Upload your first post") { UploadView() }
+                        .buttonStyle(.borderedProminent)
+                }
             }
         }
         .safeAreaInset(edge: .bottom) {

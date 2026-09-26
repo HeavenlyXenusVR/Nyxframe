@@ -16,6 +16,7 @@ struct FollowingLikedView: View {
     @State private var isLoading = true
     @State private var errorMessage: String?
     @EnvironmentObject private var session: SessionStore
+    @EnvironmentObject private var quickActionRouter: QuickActionRouter
 
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: Appearance.gridColumnMinWidth(session.currentUser?.userSettings?.gridDensity)), spacing: Appearance.gridSpacing(session.currentUser?.userSettings?.columnGap))]
@@ -31,7 +32,7 @@ struct FollowingLikedView: View {
             .onChange(of: mode) { _ in Task { await load() } }
 
             if let errorMessage {
-                Text(errorMessage).foregroundStyle(.red).padding()
+                InlineErrorView(message: errorMessage) { await load() }
             }
 
             LazyVGrid(columns: columns, spacing: Appearance.gridSpacing(session.currentUser?.userSettings?.columnGap)) {
@@ -47,8 +48,31 @@ struct FollowingLikedView: View {
             if items.isEmpty && !isLoading {
                 ContentUnavailableCompat(
                     title: mode == .following ? "No posts from people you follow yet" : "Nothing liked yet",
-                    systemImage: mode == .following ? "person.2" : "heart"
-                )
+                    systemImage: mode == .following ? "person.2" : "heart",
+                    hint: mode == .following
+                        ? "Follow a few creators and their newest posts collect here."
+                        : "Anything you like while browsing collects here."
+                ) {
+                    if mode == .following {
+                        // Search is a push: it's a screen this stack
+                        // doesn't already contain.
+                        NavigationLink("Find people to follow") { SearchView() }
+                            .buttonStyle(.bordered)
+                    } else {
+                        // Discover is a TAB, not a push. Pushing a second
+                        // copy of it inside this stack would leave the
+                        // viewer somewhere that looks like Discover but
+                        // has a back button to a feed they were told was
+                        // empty. QuickActionRouter is how the app already
+                        // switches tabs programmatically (Home-screen
+                        // quick actions use it), so reuse that rather
+                        // than threading a new binding down here.
+                        Button("Browse Discover") {
+                            quickActionRouter.pendingDestination = .discover
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
                 .padding(.top, 60)
             }
         }

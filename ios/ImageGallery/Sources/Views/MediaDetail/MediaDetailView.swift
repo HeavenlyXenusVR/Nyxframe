@@ -75,7 +75,7 @@ struct MediaDetailView: View {
                 } else if viewModel.isLoading {
                     ProgressView().padding(.top, 80)
                 } else if let errorMessage = viewModel.errorMessage {
-                    Text(errorMessage).foregroundStyle(.red)
+                    InlineErrorView(message: errorMessage) { await viewModel.load() }
                 }
             }
             .padding()
