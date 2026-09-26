@@ -64,7 +64,7 @@ export function FeedPage({ ctx, mode }) {
 
   return (
     <Page title={title} eyebrow="Feed">
-      {error ? <Notice kind="error">{error}</Notice> : null}
+      {error ? <Notice kind="error" onRetry={() => loadFeed()}>{error}</Notice> : null}
       {followingEmpty ? (
         <div className="empty-state feed-empty-cta">
           <UserPlus size={28} />
@@ -73,7 +73,11 @@ export function FeedPage({ ctx, mode }) {
           <Link className="button-link primary" to="/users"><UserPlus size={16} />Browse Creators</Link>
         </div>
       ) : likedEmpty ? (
-        <EmptyState title="You haven't liked any posts yet" />
+        <EmptyState
+            title="You haven't liked any posts yet"
+            hint="Anything you like while browsing collects here."
+            action={<Link className="button-link primary" to="/">Browse Discover</Link>}
+          />
       ) : (
         <MediaGrid ctx={ctx} items={items} loading={loading} emptyTitle={mode === "liked" ? "No liked posts yet" : "No following posts yet"} onItemUpdated={handleItemUpdated} onOpen={ctx.openLightbox} />
       )}

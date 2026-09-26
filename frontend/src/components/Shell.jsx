@@ -4,7 +4,7 @@ import { AlertTriangle, Folder, Grid3X3, Heart, Home, Image as ImageIcon, LogIn,
 import { apiFetch, cachedApiFetch } from "../api.js";
 import { useLiveRefresh } from "../hooks/useLiveRefresh.js";
 import { getPendingUploadJobs, removePendingUploadJob } from "../uploadJobs.js";
-import { Avatar, GlassFilterDefs, glassPointerMove } from "./ui.jsx";
+import { Avatar, BackToTop, GlassFilterDefs, glassPointerMove } from "./ui.jsx";
 import { NotificationBell } from "./NotificationBell.jsx";
 
 // The primary nav has grown to eleven entries for a signed-in owner.
@@ -170,6 +170,11 @@ export function Shell({ ctx, children, className = "", style }) {
 
   return (
     <div className={`app-shell ${className}`.trim()} style={style}>
+      {/* Keyboard users hit up to twelve nav destinations plus the
+          account controls before reaching the content, on every single
+          page. Standard escape hatch: visually hidden until focused,
+          which is the first Tab stop on the page. */}
+      <a className="skip-link" href="#main-content">Skip to content</a>
       <GlassFilterDefs />
       {site?.announcement_active && site.announcement_message && !bannerDismissed ? (
         <div className={`site-announcement-banner level-${site.announcement_level || "info"}`}>
@@ -261,7 +266,8 @@ export function Shell({ ctx, children, className = "", style }) {
           </div>
         </>
       ) : null}
-      <main className="main-stage">{children}</main>
+      <main className="main-stage" id="main-content" tabIndex={-1}>{children}</main>
+      <BackToTop />
       <footer className="site-footer">
         <span>Nyxframe // HeavenlyXenusVR</span>
         <a href="https://discord.com/users/1304564041863266347" target="_blank" rel="noreferrer">Discord</a>

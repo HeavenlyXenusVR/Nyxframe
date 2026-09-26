@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Download, Eye, RefreshCw, Tag, Trash2 } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Download, Eye, RefreshCw, Tag, Trash2, Upload } from "lucide-react";
 import { apiFetch, apiFetchBlob, clearApiCache, downloadBlob } from "../api.js";
 import { useLiveRefresh } from "../hooks/useLiveRefresh.js";
 import { StudioItem } from "../components/media.jsx";
@@ -286,7 +287,13 @@ export function StudioPage({ ctx }) {
           ))}
         </div>
       )}
-      {!loading && !items.length ? <EmptyState title="No uploads yet" /> : null}
+      {!loading && !items.length ? (
+        <EmptyState
+          title="No uploads yet"
+          hint="Posts you publish show up here, with their stats and owner controls."
+          action={<Link className="button-link primary" to="/upload"><Upload size={16} />Upload your first post</Link>}
+        />
+      ) : null}
     </Page>
   );
 }

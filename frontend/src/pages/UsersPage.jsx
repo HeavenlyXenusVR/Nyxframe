@@ -72,7 +72,12 @@ export function UsersPage({ ctx }) {
           {users.map((user) => <UserCard ctx={ctx} user={user} onChanged={() => loadUsers({ background: true })} key={user.id} />)}
         </div>
       )}
-      {!loading && !users.length ? <EmptyState title="No users found" /> : null}
+      {!loading && !users.length ? (
+        <EmptyState
+          title={query ? `No users match “${query}”` : "No users found"}
+          action={query ? <button type="button" className="button-link" onClick={() => setQuery("")}>Clear search</button> : null}
+        />
+      ) : null}
     </Page>
   );
 }

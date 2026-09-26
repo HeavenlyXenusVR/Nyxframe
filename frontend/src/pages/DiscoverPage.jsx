@@ -5,7 +5,7 @@ import { apiFetch, cachedApiFetch, clearApiCache, toQuery } from "../api.js";
 import { PAGE_SIZE } from "../config.js";
 import { CategoryPills, DiscoverMemories, DiscoverTrending } from "../components/discover.jsx";
 import { MediaGrid } from "../components/media.jsx";
-import { Notice, Page, TagCloud } from "../components/ui.jsx";
+import { EmptyState, Notice, Page, TagCloud } from "../components/ui.jsx";
 import { preloadMediaAssets, replaceMedia } from "../utils/media.js";
 
 function timeOfDayGreeting(user) {
@@ -473,16 +473,33 @@ export function DiscoverPage({ ctx }) {
             </div>
           </div>
 
-          {error ? <Notice kind="error">{error}</Notice> : null}
-          <MediaGrid
-            ctx={ctx}
-            items={items}
-            loading={loading}
-            emptyTitle="No posts match this view"
-            onItemUpdated={handleItemUpdated}
-            onOpen={openLightbox}
-            extraClass={gridExtraClass}
-          />
+          {error ? (
+            <Notice kind="error" onRetry={() => { clearApiCache("/api/media"); setError(""); setLoading(true); loadMedia({ page: 1, append: false }); }}>
+              {error}
+            </Notice>
+          ) : null}
+          {/* An empty grid caused by the filter rail used to be a dead
+              end -- "No posts match this view" and nothing to act on, on
+              the one page where the cause is almost always a filter the
+              viewer set several interactions ago and can no longer see
+              the whole of. */}
+          {!loading && !items.length && filterChips.length > 0 ? (
+            <EmptyState
+              title="No posts match these filters"
+              hint="Try widening the search, or clear the filters to see everything again."
+              action={<button type="button" className="button-link" onClick={clearAllFilters}>Clear all filters</button>}
+            />
+          ) : (
+            <MediaGrid
+              ctx={ctx}
+              items={items}
+              loading={loading}
+              emptyTitle="No posts here yet"
+              onItemUpdated={handleItemUpdated}
+              onOpen={openLightbox}
+              extraClass={gridExtraClass}
+            />
+          )}
 
           {/* Infinite scroll sentinel */}
           <div ref={sentinelRef} className="scroll-sentinel" aria-hidden="true" />
@@ -490,6 +507,28 @@ export function DiscoverPage({ ctx }) {
             <div className="load-more-spinner" aria-label="Loading more posts">
               <span className="spinner-ring" />
               <span>Loading more</span>
+            </div>
+          ) : null}
+          {/* A real control alongside the sentinel, not instead of it.
+              Infinite scroll on its own is unreachable by keyboard and
+              silently does nothing if IntersectionObserver never fires
+              (a short viewport where the sentinel starts on screen, a
+              restored scroll position that lands past it); this always
+              works, and pressing it is also how a screen-reader user
+              gets to page two at all. */}
+          {hasNext && !loadingMore && !loading ? (
+            <div className="load-more-row">
+              <button
+                type="button"
+                onClick={() => {
+                  const nextPage = pageRef.current + 1;
+                  pageRef.current = nextPage;
+                  setLoadingMore(true);
+                  loadMedia({ page: nextPage, append: true });
+                }}
+              >
+                Load more
+              </button>
             </div>
           ) : null}
           {!hasNext && !loading && items.length > 0 ? (

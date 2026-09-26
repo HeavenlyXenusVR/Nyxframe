@@ -615,7 +615,7 @@ function MusicTab({ ctx }) {
       ) : null}
 
       {tracks.length === 0 ? (
-        <EmptyState title="No background tracks yet" description="Add one above to start the ambient shuffle for visitors." />
+        <EmptyState title="No background tracks yet" hint="Add one above to start the ambient shuffle for visitors." />
       ) : (
         <div className="admin-reports-list">
           {tracks.map((track) => (

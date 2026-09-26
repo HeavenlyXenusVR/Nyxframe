@@ -6545,3 +6545,132 @@ textarea:focus {
     clip-path: none;
   }
 }
+
+/* ===========================================================================
+   Page-level upgrades: skip link, retryable notices, empty-state actions,
+   back-to-top, load-more rows
+   =========================================================================== */
+
+.skip-link {
+  position: absolute;
+  left: 12px;
+  top: -60px;
+  z-index: 300;
+  padding: 10px 16px;
+  border-radius: 0 0 12px 12px;
+  background: var(--accent);
+  color: #05221c;
+  font-weight: 700;
+  text-decoration: none;
+  transition: top 140ms ease;
+}
+
+.skip-link:focus {
+  top: 0;
+}
+
+/* The notice grew a trailing action, so it needs to lay out as a row
+   rather than as a block of text. */
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.notice > span {
+  flex: 1;
+  min-width: 0;
+}
+
+.notice-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 6px 12px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.notice-retry:hover {
+  background: color-mix(in srgb, currentColor 14%, transparent);
+}
+
+.empty-state-hint {
+  margin: 0;
+  max-width: 44ch;
+  color: var(--muted);
+  font-size: 0.88rem;
+  text-align: center;
+}
+
+.load-more-row {
+  display: flex;
+  justify-content: center;
+  padding: 18px 0 6px;
+}
+
+.load-more-row button {
+  padding: 10px 22px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.load-more-row button:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--panel-2));
+}
+
+.load-more-row button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.back-to-top {
+  position: fixed;
+  right: max(18px, env(safe-area-inset-right));
+  /* Clears the phone's fixed bottom nav; on desktop that inset is zero
+     and this just sits above the footer. */
+  bottom: calc(84px + env(safe-area-inset-bottom));
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+  animation: back-to-top-in 160ms ease both;
+}
+
+.back-to-top:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+@keyframes back-to-top-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@media (min-width: 761px) {
+  .back-to-top {
+    bottom: max(24px, env(safe-area-inset-bottom));
+  }
+}

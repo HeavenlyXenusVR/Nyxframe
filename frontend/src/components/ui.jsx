@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Download, Eye, Folder, Heart, Lock, LogIn, MessageCircle, Sparkles } from "lucide-react";
+import { ArrowUp, Download, Eye, Folder, Heart, Lock, LogIn, MessageCircle, RefreshCw, Sparkles } from "lucide-react";
 import { formatDate, initials, numberish } from "../utils/format.js";
 import { reportMediaLoadDiagnostic } from "../utils/media.js";
 
@@ -58,7 +58,26 @@ export function glassPointerMove(event) {
   });
 }
 
+// Every route renders through Page, which makes it the one place that
+// can give the browser a real title. Without this the tab, the history
+// entry and any bookmark all read a bare "Nyxframe" no matter where you
+// are -- which is invisible on a single tab and useless the moment
+// someone has three of them open, or tries to find a page again in
+// history.
+const SITE_NAME = "Nyxframe";
+
 export function Page({ title, eyebrow, lede = "", actions, className = "", children }) {
+  useEffect(() => {
+    if (!title) return undefined;
+    const previous = document.title;
+    document.title = `${title} · ${SITE_NAME}`;
+    // Restoring on unmount matters for the transient titles a page shows
+    // while it loads (MediaDetailPage renders "Media" before it knows the
+    // post's name), so a fast back-navigation can't leave a stale one
+    // behind.
+    return () => { document.title = previous; };
+  }, [title]);
+
   return (
     <div className={`page ${className}`.trim()}>
       <header className="page-head">
@@ -236,12 +255,65 @@ export function Metric({ label, value }) {
   );
 }
 
-export function Notice({ kind = "info", children }) {
-  return <div className={`notice ${kind}`} role="alert">{children}</div>;
+// `onRetry` turns an error from a dead end into something actionable.
+// Every page that fetches rendered its failure as a bare sentence, so a
+// dropped connection or a backend restart (this one rotates its tunnel)
+// left no way forward but reloading the whole app by hand.
+export function Notice({ kind = "info", children, onRetry, retryLabel = "Try again" }) {
+  return (
+    <div className={`notice ${kind}`} role="alert">
+      <span>{children}</span>
+      {onRetry ? (
+        <button type="button" className="notice-retry" onClick={onRetry}>
+          <RefreshCw size={14} />{retryLabel}
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
-export function EmptyState({ title }) {
-  return <div className="empty-state"><Sparkles size={24} /><h2>{title}</h2></div>;
+// `action` lets a caller answer the obvious "...so what do I do now?".
+// An empty grid caused by filters is the common case, and "no posts
+// match this view" with no way to widen it reads as a broken page.
+export function EmptyState({ title, hint = "", action = null, icon: Icon = Sparkles }) {
+  return (
+    <div className="empty-state">
+      <Icon size={24} />
+      <h2>{title}</h2>
+      {hint ? <p className="empty-state-hint">{hint}</p> : null}
+      {action}
+    </div>
+  );
+}
+
+// Appears once the viewer is far enough down that scrolling back is a
+// chore -- which on Discover, with infinite scroll, can be many screens.
+export function BackToTop({ threshold = 1200 }) {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const onScroll = () => setVisible(window.scrollY > threshold);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, [threshold]);
+  if (!visible) return null;
+  return (
+    <button
+      type="button"
+      className="back-to-top"
+      // `auto` when the viewer has asked for less motion: smooth-scrolling
+      // several thousand pixels is exactly the kind of movement that
+      // setting exists to avoid.
+      onClick={() => window.scrollTo({
+        top: 0,
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+      })}
+      title="Back to top"
+      aria-label="Back to top"
+    >
+      <ArrowUp size={18} />
+    </button>
+  );
 }
 
 export function RequireLogin() {

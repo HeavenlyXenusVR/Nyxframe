@@ -184,7 +184,7 @@ export function CollectionsPage({ ctx }) {
         <button type="button" onClick={() => loadCollections({ fresh: true })} disabled={loading}><RefreshCw size={16} />Refresh</button>
       </>
     )}>
-      {error ? <Notice kind="error">{error}</Notice> : null}
+      {error ? <Notice kind="error" onRetry={() => loadCollections({ fresh: true })}>{error}</Notice> : null}
       <section className="split-view">
         <aside className="list-panel">
           {ctx.user && mine && suggestions.length ? (
@@ -278,7 +278,9 @@ export function CollectionsPage({ ctx }) {
               </span>
             </button>
           ))}
-          {!loading && !collections.length ? <EmptyState title="No collections" /> : null}
+          {!loading && !collections.length ? (
+            <EmptyState title="No collections yet" hint="Group posts you want to keep together, or save a filtered Discover view as a smart collection." />
+          ) : null}
         </aside>
         <section className="detail-panel collection-detail-panel">
           {selected ? (

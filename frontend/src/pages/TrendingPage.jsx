@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { RefreshCw, TrendingUp } from "lucide-react";
 import { apiFetch, cachedApiFetch, clearApiCache, toQuery } from "../api.js";
 import { MediaGrid } from "../components/media.jsx";
-import { Notice, Page, Segmented } from "../components/ui.jsx";
+import { EmptyState, Notice, Page, Segmented } from "../components/ui.jsx";
 import { preloadMediaAssets, replaceMedia } from "../utils/media.js";
 
 const WINDOWS = [["1", "24h"], ["7", "7 days"], ["30", "30 days"]];
@@ -56,6 +56,9 @@ function Leaderboard() {
 
 export function TrendingPage({ ctx }) {
   const [days, setDays] = useState("7");
+  // The window's ranking was hard-capped at 30 posts with no way to see
+  // past it -- a dead end on a busy week, and the endpoint takes a limit.
+  const [limit, setLimit] = useState(30);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -66,7 +69,7 @@ export function TrendingPage({ ctx }) {
     setLoading(true);
     setError("");
     try {
-      const path = `/api/media/trending${toQuery({ days, limit: 30 })}`;
+      const path = `/api/media/trending${toQuery({ days, limit })}`;
       const data = fresh
         ? await apiFetch(path)
         : await cachedApiFetch(path, { ttl: 30_000, staleTtl: 5 * 60_000 });
@@ -79,11 +82,15 @@ export function TrendingPage({ ctx }) {
     } finally {
       setLoading(false);
     }
-  }, [days]);
+  }, [days, limit]);
 
   useEffect(() => {
     loadTrending();
   }, [loadTrending]);
+
+  // A new window starts over at the default depth rather than inheriting
+  // however far the viewer had expanded the previous one.
+  useEffect(() => { setLimit(30); }, [days]);
 
   return (
     <Page
@@ -99,14 +106,35 @@ export function TrendingPage({ ctx }) {
         </>
       )}
     >
-      {error ? <Notice kind="error">{error}</Notice> : null}
+      {error ? <Notice kind="error" onRetry={() => loadTrending({ fresh: true })}>{error}</Notice> : null}
       {!loading && !items.length && !error ? (
-        <div className="empty-state">
-          <TrendingUp size={24} />
-          <h2>Nothing trending in this window yet</h2>
-        </div>
+        // A quiet week is the normal case on a small archive, and the
+        // default window is the shortest one -- so the most common way to
+        // arrive here is to land on an empty page while a wider window is
+        // full. Offer the widening instead of leaving a dead end.
+        <EmptyState
+          icon={TrendingUp}
+          title="Nothing trending in this window yet"
+          hint={days === "30" ? "Try a different sort on Discover to find older posts." : "Nothing has picked up views or likes in this period."}
+          action={days !== "30" ? (
+            <button type="button" className="button-link" onClick={() => setDays("30")}>Look at the last 30 days</button>
+          ) : (
+            <Link className="button-link" to="/">Browse Discover</Link>
+          )}
+        />
       ) : (
-        <MediaGrid ctx={ctx} items={items} loading={loading} emptyTitle="Nothing trending yet" onItemUpdated={handleItemUpdated} onOpen={ctx.openLightbox} />
+        <>
+          <MediaGrid ctx={ctx} items={items} loading={loading} emptyTitle="Nothing trending yet" onItemUpdated={handleItemUpdated} onOpen={ctx.openLightbox} />
+          {/* Only offered while the server is still filling the window:
+              fewer rows than asked for means there is nothing more. */}
+          {items.length >= limit ? (
+            <div className="load-more-row">
+              <button type="button" onClick={() => setLimit((value) => value + 30)} disabled={loading}>
+                Show more
+              </button>
+            </div>
+          ) : null}
+        </>
       )}
       <Leaderboard />
     </Page>

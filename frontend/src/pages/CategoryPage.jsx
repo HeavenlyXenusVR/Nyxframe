@@ -72,7 +72,7 @@ export function CategoryPage({ ctx }) {
       eyebrow="Browse"
       lede={category ? `Everything filed under ${category.name}.` : ""}
     >
-      {error ? <Notice kind="error">{error}</Notice> : null}
+      {error ? <Notice kind="error" onRetry={() => loadCategory()}>{error}</Notice> : null}
       {subcategories.length ? (
         <div className="category-chip-row">
           <button

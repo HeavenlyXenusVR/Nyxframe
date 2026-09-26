@@ -56,7 +56,7 @@ export function ProfilePage({ ctx }) {
   useLiveRefresh(() => loadProfile({ background: true }), { enabled: Boolean(username), interval: 20_000 });
 
   if (loading) return <Page title="Profile" eyebrow="Loading"><SkeletonGrid count={4} /></Page>;
-  if (error) return <Page title="Profile" eyebrow="Error"><Notice kind="error">{error}</Notice></Page>;
+  if (error) return <Page title="Profile" eyebrow="Error"><Notice kind="error" onRetry={() => loadProfile()}>{error}</Notice></Page>;
   if (!data?.user) return <NotFound />;
 
   const profile = data.user;

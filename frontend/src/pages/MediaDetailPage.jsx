@@ -200,7 +200,7 @@ export function MediaDetailPage({ ctx }) {
   }
 
   if (loading) return <Page title="Media" eyebrow="Loading"><SkeletonGrid count={1} /></Page>;
-  if (error) return <Page title="Media" eyebrow="Error"><Notice kind="error">{error}</Notice></Page>;
+  if (error) return <Page title="Media" eyebrow="Error"><Notice kind="error" onRetry={() => loadDetail()}>{error}</Notice></Page>;
   if (!media) return <NotFound />;
 
   const isOwner = ctx.user && Number(ctx.user.id) === Number(media.user_id);
