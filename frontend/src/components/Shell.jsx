@@ -44,6 +44,9 @@ export function Shell({ ctx, children, className = "", style }) {
   const [site, setSite] = useState(null);
   const [bannerDismissed, setBannerDismissed] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  // Browser URL at the moment the sheet was opened -- see the close-on-
+  // navigation effect below.
+  const moreOpenedAtRef = useRef("");
   const location = useLocation();
 
   const navItems = NAV_ITEMS.filter((item) => {
@@ -59,8 +62,22 @@ export function Shell({ ctx, children, className = "", style }) {
   const overflowActive = overflowItems.some((item) => item.to !== "/" && location.pathname.startsWith(item.to));
 
   // Any navigation closes the sheet -- without this it stays open on top
-  // of the page it just sent you to.
-  useEffect(() => { setMoreOpen(false); }, [location.pathname]);
+  // of the page it just sent you to (e.g. the browser back button while it's
+  // open). But only a navigation that happened *after* it opened: React
+  // Router updates the address bar first and commits the new route in a
+  // transition a beat later, so a "More" tap landing in that gap (a slow
+  // phone rendering the next page) used to open the sheet and then have
+  // this effect snap it shut the moment the route committed.
+  useEffect(() => {
+    if (window.location.href !== moreOpenedAtRef.current) setMoreOpen(false);
+  }, [location.pathname]);
+
+  function toggleMore() {
+    setMoreOpen((value) => {
+      if (!value) moreOpenedAtRef.current = window.location.href;
+      return !value;
+    });
+  }
 
   // ─── Does the nav actually fit? ──────────────────────────────────────
   // .primary-nav has `overflow-x: auto`, so when it doesn't fit it simply
@@ -209,7 +226,7 @@ export function Shell({ ctx, children, className = "", style }) {
           <button
             type="button"
             className={`nav-item nav-item-more${overflowActive ? " active" : ""}`}
-            onClick={() => setMoreOpen((value) => !value)}
+            onClick={toggleMore}
             aria-expanded={moreOpen}
             aria-label="More navigation"
           >
