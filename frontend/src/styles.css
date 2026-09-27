@@ -4417,6 +4417,7 @@ textarea:focus {
   .settings-page-layout,
   .profile-showcase,
   .profile-sections,
+  .profile-layout-mosaic.profile-sections,
   .upload-layout {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -5623,6 +5624,8 @@ textarea:focus {
 .notification-row {
   display: flex;
   align-items: flex-start;
+  /* The base button rule centres content; a list row reads left-aligned. */
+  justify-content: flex-start;
   gap: 10px;
   width: 100%;
   min-height: auto;
@@ -7165,6 +7168,13 @@ select option {
   box-shadow: var(--glass-edge);
   backdrop-filter: var(--glass-blur-soft);
   -webkit-backdrop-filter: var(--glass-blur-soft);
+}
+
+/* Contain the footer's bottom margin: on a plain block .app-shell it
+   collapsed through to <html>, leaving a strip of the (dark) root
+   background under the footer -- visible in light mode. */
+.app-shell {
+  display: flow-root;
 }
 
 .gallery-theme-light .site-footer a {
