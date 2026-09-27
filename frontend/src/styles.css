@@ -1254,7 +1254,7 @@ textarea:focus {
   min-height: 0;
   border-radius: 999px;
   padding: 5px 9px;
-  color: #c9d6e4;
+  color: var(--text);
   font-size: 0.8rem;
 }
 
@@ -7175,4 +7175,340 @@ select option {
   .gallery-theme-system .site-footer a {
     color: color-mix(in srgb, var(--accent) 60%, #0b2a24);
   }
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   Discover front page -- hero, browse bar, filter panel, results
+   ─────────────────────────────────────────────────────────────────────────
+   Top to bottom: one glass hero (greeting + big search + popular tags)
+   replaces the old page-head/greeting/search stack; trending + memories;
+   then a sticky browse bar (categories, type, sort, Filters, view) above a
+   full-width results grid. The old always-open filter sidebar is gone --
+   its rarely-used fields live in the collapsible "More filters" panel.
+   ═════════════════════════════════════════════════════════════════════════ */
+
+.discover-hero {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  padding: clamp(20px, 3vw, 34px);
+  overflow: hidden;
+  border: 1px solid var(--glass-border);
+  border-radius: calc(var(--radius) + 10px);
+  background:
+    radial-gradient(120% 140% at 0% 0%, color-mix(in srgb, var(--accent) 22%, transparent), transparent 55%),
+    radial-gradient(90% 120% at 100% 100%, color-mix(in srgb, var(--accent-2) 16%, transparent), transparent 60%),
+    var(--glass-fill);
+  box-shadow: var(--glass-edge), var(--glass-shadow);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+
+.discover-hero-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.discover-hero-kicker {
+  margin: 0 0 6px;
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.discover-hero h1 {
+  margin: 0;
+  font-size: clamp(1.9rem, 4vw, 3.4rem);
+  line-height: 1.02;
+  letter-spacing: -0.04em;
+}
+
+.discover-hero-lede {
+  display: block;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 1.02rem;
+}
+
+.discover-hero-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.discover-hero .discover-search {
+  max-width: 820px;
+  padding: 0 8px 0 20px;
+  background: var(--glass-input);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.12), var(--glass-edge);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.discover-hero .discover-search input {
+  min-height: 58px;
+  font-size: 1.06rem;
+}
+
+.discover-search-hint {
+  display: inline-grid;
+  place-items: center;
+  min-width: 28px;
+  height: 28px;
+  margin-right: 8px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: var(--glass-control);
+  color: var(--muted);
+  font: 700 0.8rem/1 "Fira Code", ui-monospace, monospace;
+}
+
+.discover-search-clear {
+  flex: 0 0 auto;
+  width: 40px;
+  min-height: 40px;
+  padding: 0;
+  border-radius: 999px;
+}
+
+.discover-hero-tags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.discover-hero-tags > span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.discover-hero-tags button {
+  min-height: 30px;
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 0.84rem;
+}
+
+.discover-hero-tags button.active {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--glass-border));
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+/* ── Browse bar ─────────────────────────────────────────────────────────── */
+.discover-browse {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+
+.discover-browse-bar {
+  position: sticky;
+  top: 92px;
+  z-index: 12;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 8px 8px 10px;
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  background: var(--glass-fill-strong);
+  box-shadow: var(--glass-edge), var(--glass-shadow);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+
+.discover-browse-bar .category-pills {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-bottom: 0;
+  scrollbar-width: none;
+}
+
+.discover-browse-bar .category-pills::-webkit-scrollbar {
+  display: none;
+}
+
+.discover-browse-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.discover-browse-controls .segmented {
+  padding: 3px;
+  border-radius: 999px;
+}
+
+.discover-browse-controls .segmented button {
+  min-height: 30px;
+  padding: 4px 12px;
+  border-radius: 999px;
+}
+
+.discover-sort select {
+  width: auto;
+  min-height: 38px;
+  padding: 6px 34px 6px 14px;
+  border-radius: 999px;
+}
+
+.discover-filters-toggle {
+  border-radius: 999px;
+}
+
+.discover-filters-toggle.active {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--glass-border));
+  background: color-mix(in srgb, var(--accent) 22%, var(--glass-control));
+}
+
+.discover-filters-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-contrast-text, #04211c);
+  font-size: 0.74rem;
+  font-weight: 800;
+}
+
+.discover-browse-controls .view-toggle .icon-button {
+  border-radius: 999px;
+}
+
+.subcategory-pills {
+  padding: 0 4px;
+}
+
+.subcategory-pills .category-pill {
+  min-height: 30px;
+  padding: 4px 12px;
+  font-size: 0.8rem;
+}
+
+/* ── More filters panel ─────────────────────────────────────────────────── */
+.discover-filter-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid var(--glass-border);
+  border-radius: calc(var(--radius) + 4px);
+  background: var(--glass-fill);
+  box-shadow: var(--glass-edge), var(--glass-shadow);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  animation: surface-enter var(--motion-med) both;
+}
+
+.discover-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+}
+
+/* ── Results ────────────────────────────────────────────────────────────── */
+.discover-results-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.discover-results-head h2 {
+  margin: 0;
+  font-size: 1.3rem;
+  letter-spacing: -0.02em;
+}
+
+/* Sticky bar sits under the floating topbar only while the topbar is a
+   single row; once it wraps (≤1180px) or becomes a phone header, the bar
+   just scrolls with the page instead of eating the viewport. */
+@media (max-width: 1180px) {
+  .discover-browse-bar {
+    position: static;
+    flex-wrap: wrap;
+    border-radius: calc(var(--radius) + 4px);
+  }
+
+  .discover-browse-bar .category-pills {
+    flex-basis: 100%;
+  }
+
+  .discover-browse-controls {
+    flex: 1 1 auto;
+    flex-wrap: wrap;
+  }
+
+  .discover-browse-controls .view-toggle {
+    margin-left: auto;
+  }
+}
+
+@media (max-width: 760px) {
+  .discover-hero {
+    gap: 14px;
+    border-radius: calc(var(--radius) + 4px);
+  }
+
+  .discover-hero-top {
+    flex-direction: column;
+  }
+
+  .discover-hero-actions {
+    width: 100%;
+  }
+
+  .discover-hero-actions button:first-child {
+    flex: 1;
+  }
+
+  .discover-hero .discover-search input {
+    min-height: 50px;
+    font-size: 1rem;
+  }
+
+  .discover-search-hint {
+    display: none;
+  }
+
+  .discover-browse-controls .segmented {
+    flex: 1 1 auto;
+  }
+
+  .discover-browse-controls .segmented button {
+    flex: 1;
+  }
+
+  .discover-filters-toggle span:not(.discover-filters-count) {
+    display: none;
+  }
+}
+
+/* The full-width Discover grid packs more (narrower) cards per row; keep
+   the like/bookmark/download/copy/collect row on one line at ~250px. */
+.media-card .card-actions {
+  gap: 6px;
+  padding-inline: 10px;
+}
+
+.media-card .card-actions button {
+  min-width: 34px;
+  padding: 6px 8px;
+  gap: 5px;
+}
+
+/* Keep the two "Save as…" chips together at the end of the chip row. */
+.active-filters .filter-chip-save + .filter-chip-save {
+  margin-left: 0;
 }
