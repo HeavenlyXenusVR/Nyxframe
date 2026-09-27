@@ -7073,10 +7073,30 @@ select option {
   color: #fff;
 }
 
+/* Light text/colours that were tuned for dark glass: the avatar initials
+   and the green "Live" pill would wash out on white glass. */
+.gallery-theme-light .avatar {
+  color: var(--text);
+}
+
+.gallery-theme-light .health-pill.is-live {
+  border-color: rgba(26, 127, 55, 0.35);
+  color: #1a7f37;
+}
+
 @media (prefers-color-scheme: light) {
   .gallery-theme-system select option {
     background: #ffffff;
     color: #101923;
+  }
+
+  .gallery-theme-system .avatar {
+    color: var(--text);
+  }
+
+  .gallery-theme-system .health-pill.is-live {
+    border-color: rgba(26, 127, 55, 0.35);
+    color: #1a7f37;
   }
 }
 
@@ -7130,4 +7150,29 @@ select option {
    info column's "Full page" button. */
 .lb-info-top {
   padding-right: 40px;
+}
+
+/* The footer sits straight on the (now clearly visible) gallery background,
+   so give it a small glass pill to keep its text legible on any image. */
+.site-footer {
+  width: fit-content;
+  max-width: calc(100% - 32px);
+  margin: 0 auto 26px;
+  padding: 8px 16px;
+  border: 1px solid var(--glass-border);
+  border-radius: 999px;
+  background: var(--glass-fill-soft);
+  box-shadow: var(--glass-edge);
+  backdrop-filter: var(--glass-blur-soft);
+  -webkit-backdrop-filter: var(--glass-blur-soft);
+}
+
+.gallery-theme-light .site-footer a {
+  color: color-mix(in srgb, var(--accent) 60%, #0b2a24);
+}
+
+@media (prefers-color-scheme: light) {
+  .gallery-theme-system .site-footer a {
+    color: color-mix(in srgb, var(--accent) 60%, #0b2a24);
+  }
 }
