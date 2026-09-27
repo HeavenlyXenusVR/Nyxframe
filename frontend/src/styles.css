@@ -4,12 +4,14 @@
   background: #0e1217;
   color: #eef4f8;
   --bg: #0e1217;
-  --panel: #151b22;
-  --panel-2: #1b2430;
-  --panel-3: #222c38;
-  --surface: #151b22;
-  --line: #2b3948;
-  --line-strong: #405064;
+  /* Liquid Glass: every surface token is translucent so the site
+     background shows through (blurred) behind panels, cards and controls. */
+  --panel: rgba(20, 26, 36, 0.46);
+  --panel-2: rgba(255, 255, 255, 0.07);
+  --panel-3: rgba(255, 255, 255, 0.11);
+  --surface: rgba(20, 26, 36, 0.46);
+  --line: rgba(255, 255, 255, 0.14);
+  --line-strong: rgba(255, 255, 255, 0.26);
   --text: #eef4f8;
   --muted: #9daab8;
   --muted-2: #748293;
@@ -19,7 +21,26 @@
   --danger: #ff6b6b;
   --ok: #7ee787;
   --radius: 18px;
-  --shadow: 0 24px 72px rgba(0, 0, 0, 0.34);
+  --shadow: 0 18px 50px rgba(0, 0, 0, 0.28);
+  --glass-fill:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.035) 55%, rgba(255, 255, 255, 0.06)),
+    rgba(16, 20, 30, 0.34);
+  --glass-fill-soft:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.025)),
+    rgba(16, 20, 30, 0.2);
+  --glass-fill-strong:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.03)),
+    rgba(14, 18, 26, 0.66);
+  --glass-control: rgba(255, 255, 255, 0.08);
+  --glass-control-hover: rgba(255, 255, 255, 0.15);
+  --glass-border: rgba(255, 255, 255, 0.16);
+  --glass-border-strong: rgba(255, 255, 255, 0.32);
+  --glass-edge: inset 0 1px 0 rgba(255, 255, 255, 0.26), inset 1px 0 0 rgba(255, 255, 255, 0.08), inset 0 -1px 0 rgba(255, 255, 255, 0.06), inset 0 0 28px rgba(255, 255, 255, 0.035);
+  --glass-shadow: 0 16px 44px rgba(0, 0, 0, 0.26);
+  --glass-input: rgba(8, 12, 20, 0.3);
+  --glass-blur: blur(24px) saturate(170%);
+  --glass-blur-soft: blur(14px) saturate(160%);
+  --site-background-strength: 0.5;
   --motion-fast: 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
   --motion-med: 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
   --motion-slow: 520ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -64,9 +85,10 @@ button,
   justify-content: center;
   gap: 8px;
   min-height: 38px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius);
-  background: #19212a;
+  background: var(--glass-control);
+  box-shadow: var(--glass-edge);
   color: var(--text);
   padding: 8px 12px;
   text-decoration: none;
@@ -80,8 +102,8 @@ button:hover,
 .auth-link:hover,
 .nav-item:hover,
 .icon-button:hover {
-  border-color: var(--line-strong);
-  background: #202a34;
+  border-color: var(--glass-border-strong);
+  background: var(--glass-control-hover);
 }
 
 button:disabled {
@@ -101,8 +123,11 @@ button:active,
 button.primary,
 .button-link.primary,
 .nav-item.accent {
-  border-color: rgba(55, 201, 167, 0.5);
-  background: linear-gradient(135deg, rgba(55, 201, 167, 0.28), rgba(110, 199, 255, 0.18));
+  border-color: color-mix(in srgb, var(--accent) 55%, rgba(255, 255, 255, 0.4));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), transparent 60%),
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 42%, transparent), color-mix(in srgb, var(--accent-2) 24%, transparent));
+  box-shadow: var(--glass-edge), 0 8px 24px color-mix(in srgb, var(--accent) 22%, transparent);
   color: #f7fffd;
 }
 
@@ -165,13 +190,11 @@ video {
   z-index: 1;
 }
 
+/* The gallery background itself stays a sharp, un-glassed image -- it is
+   what every Liquid Glass surface refracts. Shown strongly enough for the
+   glass to have something to bend. */
 body[data-background-ready="1"] .app-shell::before {
-  opacity: 0.2;
-}
-
-.gallery-theme-light body[data-background-ready="1"] .app-shell::before,
-.gallery-theme-system body[data-background-ready="1"] .app-shell::before {
-  opacity: 0.08;
+  opacity: var(--site-background-strength, 0.5);
 }
 
 /* Previous background image, shown on top of ::before while rotating so the
@@ -196,43 +219,60 @@ body[data-background-ready="1"] .app-shell::before {
 }
 
 body[data-background-ready="1"].bg-prev-visible .app-shell::after {
-  opacity: 0.2;
-}
-
-.gallery-theme-light body[data-background-ready="1"].bg-prev-visible .app-shell::after,
-.gallery-theme-system body[data-background-ready="1"].bg-prev-visible .app-shell::after {
-  opacity: 0.08;
+  opacity: var(--site-background-strength, 0.5);
 }
 
 .gallery-theme-light {
   color-scheme: light;
   --bg: #f7f9fc;
-  --panel: #ffffff;
-  --panel-2: #eef3f8;
-  --panel-3: #e4ebf3;
-  --surface: #ffffff;
-  --line: #c8d4df;
-  --line-strong: #9dadbd;
+  --panel: rgba(255, 255, 255, 0.58);
+  --panel-2: rgba(255, 255, 255, 0.5);
+  --panel-3: rgba(255, 255, 255, 0.7);
+  --surface: rgba(255, 255, 255, 0.58);
+  --line: rgba(52, 72, 102, 0.16);
+  --line-strong: rgba(52, 72, 102, 0.3);
   --text: #101923;
-  --muted: #526171;
-  --muted-2: #748394;
+  --muted: #45525f;
+  --muted-2: #66727f;
   --shadow: 0 14px 42px rgba(39, 55, 75, 0.14);
+  --glass-fill: linear-gradient(145deg, rgba(255, 255, 255, 0.66), rgba(255, 255, 255, 0.32));
+  --glass-fill-soft: linear-gradient(145deg, rgba(255, 255, 255, 0.56), rgba(255, 255, 255, 0.24));
+  --glass-fill-strong: linear-gradient(145deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.72));
+  --glass-input: rgba(255, 255, 255, 0.5);
+  --glass-control: rgba(255, 255, 255, 0.55);
+  --glass-control-hover: rgba(255, 255, 255, 0.8);
+  --glass-border: rgba(255, 255, 255, 0.78);
+  --glass-border-strong: rgba(255, 255, 255, 0.96);
+  --glass-edge: inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 -1px 0 rgba(255, 255, 255, 0.35), 0 0 0 0.5px rgba(40, 60, 90, 0.1);
+  --glass-shadow: 0 14px 40px rgba(40, 55, 90, 0.16);
+  --site-background-strength: 0.55;
 }
 
 @media (prefers-color-scheme: light) {
   .gallery-theme-system {
     color-scheme: light;
     --bg: #f7f9fc;
-    --panel: #ffffff;
-    --panel-2: #eef3f8;
-    --panel-3: #e4ebf3;
-    --surface: #ffffff;
-    --line: #c8d4df;
-    --line-strong: #9dadbd;
+    --panel: rgba(255, 255, 255, 0.58);
+    --panel-2: rgba(255, 255, 255, 0.5);
+    --panel-3: rgba(255, 255, 255, 0.7);
+    --surface: rgba(255, 255, 255, 0.58);
+    --line: rgba(52, 72, 102, 0.16);
+    --line-strong: rgba(52, 72, 102, 0.3);
     --text: #101923;
-    --muted: #526171;
-    --muted-2: #748394;
+    --muted: #45525f;
+    --muted-2: #66727f;
     --shadow: 0 14px 42px rgba(39, 55, 75, 0.14);
+    --glass-fill: linear-gradient(145deg, rgba(255, 255, 255, 0.66), rgba(255, 255, 255, 0.32));
+    --glass-fill-soft: linear-gradient(145deg, rgba(255, 255, 255, 0.56), rgba(255, 255, 255, 0.24));
+    --glass-fill-strong: linear-gradient(145deg, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.72));
+    --glass-input: rgba(255, 255, 255, 0.5);
+    --glass-control: rgba(255, 255, 255, 0.55);
+    --glass-control-hover: rgba(255, 255, 255, 0.8);
+    --glass-border: rgba(255, 255, 255, 0.78);
+    --glass-border-strong: rgba(255, 255, 255, 0.96);
+    --glass-edge: inset 0 1px 0 rgba(255, 255, 255, 0.95), inset 0 -1px 0 rgba(255, 255, 255, 0.35), 0 0 0 0.5px rgba(40, 60, 90, 0.1);
+    --glass-shadow: 0 14px 40px rgba(40, 55, 90, 0.16);
+    --site-background-strength: 0.55;
   }
 }
 
@@ -268,7 +308,7 @@ body[data-background-ready="1"].bg-prev-visible .app-shell::after {
     radial-gradient(circle at 84% 20%, rgba(110, 199, 255, 0.16), transparent 24%),
     radial-gradient(circle at 72% 76%, rgba(255, 207, 106, 0.11), transparent 24%),
     linear-gradient(180deg, rgba(8, 11, 15, 0.5), rgba(8, 11, 15, 0.92)),
-    rgba(5, 7, 10, 0.7);
+    rgba(5, 7, 10, 0.35);
   backdrop-filter: blur(22px);
 }
 
@@ -285,7 +325,7 @@ body[data-background-ready="1"].bg-prev-visible .app-shell::after {
     radial-gradient(circle at top right, rgba(55, 201, 167, 0.14), transparent 34%),
     linear-gradient(150deg, rgba(110, 199, 255, 0.08), transparent 38%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.05), transparent 55%),
-    rgba(10, 15, 21, 0.92);
+    var(--glass-fill-strong);
   box-shadow:
     0 30px 90px rgba(0, 0, 0, 0.44),
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
@@ -321,7 +361,7 @@ body[data-background-ready="1"].bg-prev-visible .app-shell::after {
   background:
     radial-gradient(circle at 30% 25%, rgba(255, 207, 106, 0.22), transparent 28%),
     radial-gradient(circle at 72% 72%, rgba(110, 199, 255, 0.22), transparent 30%),
-    rgba(8, 12, 17, 0.94);
+    var(--glass-fill);
   box-shadow:
     inset 0 0 0 1px rgba(255, 255, 255, 0.05),
     0 0 42px color-mix(in srgb, var(--accent) 18%, transparent);
@@ -342,7 +382,7 @@ body[data-background-ready="1"].bg-prev-visible .app-shell::after {
   background:
     linear-gradient(135deg, rgba(55, 201, 167, 0.16), transparent 56%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.01)),
-    rgba(18, 26, 35, 0.9);
+    var(--glass-fill-soft);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
   transform: var(--frame-transform);
 }
@@ -365,7 +405,7 @@ body[data-background-ready="1"].bg-prev-visible .app-shell::after {
   background:
     linear-gradient(140deg, rgba(255, 207, 106, 0.16), transparent 36%),
     linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
-    rgba(20, 29, 38, 0.96);
+    var(--glass-fill);
   animation: gallery-frame-float 2.8s ease-in-out infinite 360ms;
 }
 
@@ -439,7 +479,7 @@ body[data-background-ready="1"].bg-prev-visible .app-shell::after {
   border-radius: calc(var(--radius) - 2px);
   background:
     linear-gradient(145deg, color-mix(in srgb, var(--accent) 10%, transparent), transparent 66%),
-    rgba(16, 23, 32, 0.82);
+    var(--glass-control);
 }
 
 .gallery-loading-status-grid article span {
@@ -465,7 +505,7 @@ body[data-background-ready="1"].bg-prev-visible .app-shell::after {
   height: 10px;
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
-  background: rgba(16, 23, 32, 0.82);
+  background: var(--glass-input);
   overflow: hidden;
 }
 
@@ -498,12 +538,12 @@ body[data-background-ready="1"].bg-prev-visible .app-shell::after {
 }
 
 .gallery-theme-light .topbar {
-  background: rgba(247, 249, 252, 0.9);
+  background: var(--glass-fill);
 }
 
 @media (prefers-color-scheme: light) {
   .gallery-theme-system .topbar {
-    background: rgba(247, 249, 252, 0.9);
+    background: var(--glass-fill);
   }
 }
 
@@ -655,9 +695,9 @@ body[data-background-ready="1"].bg-prev-visible .app-shell::after {
   flex: 0 0 auto;
   width: 38px;
   height: 38px;
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--glass-border-strong);
   border-radius: 50%;
-  background: #26313c;
+  background: var(--glass-control-hover);
   color: #c8f6ec;
   font-size: 0.76rem;
   font-weight: 800;
@@ -911,9 +951,10 @@ select,
 textarea {
   width: 100%;
   min-height: 40px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius);
-  background: #10161d;
+  background: var(--glass-input);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.12), inset 0 -1px 0 rgba(255, 255, 255, 0.06);
   color: var(--text);
   padding: 9px 10px;
   outline: none;
@@ -1007,7 +1048,7 @@ textarea:focus {
 .gallery-theme-light input,
 .gallery-theme-light select,
 .gallery-theme-light textarea {
-  background: #ffffff;
+  background: var(--glass-control);
   color: var(--text);
 }
 
@@ -1035,7 +1076,7 @@ textarea:focus {
 .gallery-theme-light .metric,
 .gallery-theme-light .notice,
 .gallery-theme-light .empty-state {
-  background: #ffffff;
+  background: var(--glass-fill);
 }
 
 .gallery-theme-light .page-head,
@@ -1048,7 +1089,7 @@ textarea:focus {
 .gallery-theme-light .settings-file-picker,
 .gallery-theme-light .card-actions,
 .gallery-theme-light .pager span {
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--glass-fill-soft);
 }
 
 .gallery-theme-light .chip-row span,
@@ -1057,7 +1098,7 @@ textarea:focus {
 .gallery-theme-light .segmented,
 .gallery-theme-light .profile-social-preview div,
 .gallery-theme-light .collection-row.active {
-  background: #f5f8fc;
+  background: var(--glass-control);
 }
 
 @media (prefers-color-scheme: light) {
@@ -1069,7 +1110,7 @@ textarea:focus {
   .gallery-theme-system input,
   .gallery-theme-system select,
   .gallery-theme-system textarea {
-    background: #ffffff;
+    background: var(--glass-control);
     color: var(--text);
   }
 
@@ -1097,7 +1138,7 @@ textarea:focus {
   .gallery-theme-system .metric,
   .gallery-theme-system .notice,
   .gallery-theme-system .empty-state {
-    background: #ffffff;
+    background: var(--glass-fill);
   }
 
   .gallery-theme-system .page-head,
@@ -1110,7 +1151,7 @@ textarea:focus {
   .gallery-theme-system .settings-file-picker,
   .gallery-theme-system .card-actions,
   .gallery-theme-system .pager span {
-    background: rgba(255, 255, 255, 0.9);
+    background: var(--glass-fill-soft);
   }
 
   .gallery-theme-system .chip-row span,
@@ -1119,7 +1160,7 @@ textarea:focus {
   .gallery-theme-system .segmented,
   .gallery-theme-system .profile-social-preview div,
   .gallery-theme-system .collection-row.active {
-    background: #f5f8fc;
+    background: var(--glass-control);
   }
 }
 
@@ -1221,7 +1262,7 @@ textarea:focus {
   border-color: color-mix(in srgb, var(--accent) 16%, var(--line));
   background:
     linear-gradient(135deg, rgba(55, 201, 167, 0.08), transparent),
-    rgba(20, 27, 35, 0.7);
+    var(--glass-control);
 }
 
 .chip-row span {
@@ -1315,7 +1356,7 @@ textarea:focus {
   place-items: center;
   background:
     linear-gradient(135deg, rgba(55, 201, 167, 0.18), rgba(110, 199, 255, 0.12)),
-    #10161d;
+    rgba(0, 0, 0, 0.16);
   color: #cfe8f6;
 }
 
@@ -1542,7 +1583,7 @@ textarea:focus {
 
 .collection-row.active {
   border-color: rgba(55, 201, 167, 0.58);
-  background: #20302f;
+  background: var(--glass-control-hover);
 }
 
 .collection-cover {
@@ -2652,19 +2693,18 @@ textarea:focus {
   padding: 22px;
   border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line));
   border-radius: var(--radius);
-  /* --profile-surface-opacity/-blur default to 1/0px (fully opaque, no
-     extra blur), matching the previous hardcoded look exactly -- these
-     are opt-in via Settings' new "Panel glass" controls, not a silent
-     redesign. Lower opacity lets the site-wide rotating background (see
-     App.jsx) show through the profile panel itself. */
+  /* Liquid Glass: --panel is already translucent, so opacity 1 / blur 0px
+     (the Settings "Panel glass" defaults) is the standard glass panel.
+     Lower opacity makes it clearer still; the blur setting adds frost on
+     top of the 20px glass baseline. */
   background:
     linear-gradient(135deg, color-mix(in srgb, var(--accent) var(--profile-backdrop-strength, 18%), transparent), rgba(110, 199, 255, 0.08)),
     var(--profile-backdrop),
     linear-gradient(135deg, color-mix(in srgb, var(--accent) 16%, transparent), rgba(110, 199, 255, 0.08)),
-    color-mix(in srgb, #151b22 calc(var(--profile-surface-opacity, 1) * 100%), transparent);
+    color-mix(in srgb, var(--panel) calc(var(--profile-surface-opacity, 1) * 100%), transparent);
   background-size: cover;
   background-position: center;
-  backdrop-filter: blur(var(--profile-surface-blur, 0px));
+  backdrop-filter: blur(calc(20px + var(--profile-surface-blur, 0px))) saturate(170%);
   box-shadow: var(--shadow);
 }
 
@@ -2681,7 +2721,7 @@ textarea:focus {
     linear-gradient(120deg, color-mix(in srgb, var(--accent) 18%, transparent), transparent 42%),
     linear-gradient(28deg, transparent 46%, rgba(110, 199, 255, 0.12), transparent 74%),
     color-mix(in srgb, var(--panel) calc(var(--profile-surface-opacity, 1) * 100%), transparent);
-  backdrop-filter: blur(var(--profile-surface-blur, 0px));
+  backdrop-filter: blur(calc(20px + var(--profile-surface-blur, 0px))) saturate(170%);
 }
 
 .profile-hero.profile-banner-frame {
@@ -2694,22 +2734,23 @@ textarea:focus {
     linear-gradient(135deg, color-mix(in srgb, var(--accent) 22%, transparent), transparent 44%),
     linear-gradient(45deg, transparent 32%, rgba(126, 231, 135, 0.12), transparent 68%),
     color-mix(in srgb, var(--panel) calc(var(--profile-surface-opacity, 1) * 100%), transparent);
-  backdrop-filter: blur(var(--profile-surface-blur, 0px));
+  backdrop-filter: blur(calc(20px + var(--profile-surface-blur, 0px))) saturate(170%);
 }
 
 .profile-hero.profile-banner-spotlight {
   background:
     linear-gradient(90deg, color-mix(in srgb, var(--accent) 24%, transparent), transparent 68%),
     color-mix(in srgb, var(--panel) calc(var(--profile-surface-opacity, 1) * 100%), transparent);
-  backdrop-filter: blur(var(--profile-surface-blur, 0px));
+  backdrop-filter: blur(calc(20px + var(--profile-surface-blur, 0px))) saturate(170%);
 }
 
 .profile-hero.profile-banner-poster {
   min-height: 280px;
   align-items: end;
   background:
-    linear-gradient(180deg, transparent, color-mix(in srgb, var(--bg) 72%, transparent)),
-    linear-gradient(135deg, color-mix(in srgb, var(--accent) 30%, #10161d), #10161d);
+    linear-gradient(180deg, transparent, color-mix(in srgb, var(--bg) 40%, transparent)),
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 30%, transparent), transparent 70%),
+    color-mix(in srgb, var(--panel) calc(var(--profile-surface-opacity, 1) * 100%), transparent);
 }
 
 .profile-hero h2 {
@@ -2773,7 +2814,7 @@ textarea:focus {
   padding: 16px;
   border: 1px solid color-mix(in srgb, var(--accent) 18%, var(--line));
   border-radius: calc(var(--radius) - 4px);
-  background: rgba(12, 18, 24, 0.48);
+  background: var(--glass-control);
 }
 
 .profile-avatar-card strong,
@@ -2852,7 +2893,7 @@ textarea:focus {
   padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: rgba(12, 18, 24, 0.42);
+  background: var(--glass-control);
   color: var(--muted);
 }
 
@@ -2893,7 +2934,7 @@ textarea:focus {
   background:
     linear-gradient(145deg, color-mix(in srgb, var(--accent) var(--profile-backdrop-strength, 18%), transparent), rgba(15, 22, 29, 0.56)),
     var(--profile-backdrop),
-    rgba(15, 22, 29, 0.72);
+    var(--panel);
   background-size: cover;
   background-position: center;
   box-shadow: var(--shadow);
@@ -3012,7 +3053,7 @@ textarea:focus {
 
 .profile-surface-quiet .profile-feature-card,
 .profile-surface-quiet .side-box {
-  background: rgba(15, 22, 29, 0.42);
+  background: var(--glass-fill-soft);
   box-shadow: none;
 }
 
@@ -3035,7 +3076,7 @@ textarea:focus {
   padding: 14px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
-  background: color-mix(in srgb, var(--accent) 10%, rgba(12, 18, 24, 0.45));
+  background: color-mix(in srgb, var(--accent) 10%, var(--glass-control));
 }
 
 .profile-social-preview strong,
@@ -3154,7 +3195,7 @@ textarea:focus {
   background:
     linear-gradient(135deg, color-mix(in srgb, var(--accent) 16%, transparent), rgba(110, 199, 255, 0.08)),
     var(--profile-backdrop),
-    rgba(12, 18, 24, 0.5);
+    var(--glass-control);
   background-size: cover;
   background-position: center;
 }
@@ -3178,7 +3219,7 @@ textarea:focus {
   background:
     linear-gradient(145deg, color-mix(in srgb, var(--accent) 10%, transparent), rgba(15, 22, 29, 0.56)),
     var(--profile-backdrop),
-    rgba(15, 22, 29, 0.72);
+    var(--panel);
   background-size: cover;
   background-position: center;
 }
@@ -3252,7 +3293,7 @@ textarea:focus {
   border-radius: calc(var(--radius) - 4px);
   background:
     linear-gradient(145deg, rgba(55, 201, 167, 0.05), transparent 68%),
-    rgba(12, 18, 24, 0.38);
+    var(--glass-fill-soft);
 }
 
 .settings-cluster-head {
@@ -3334,7 +3375,7 @@ textarea:focus {
   padding: 14px;
   border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--line));
   border-radius: calc(var(--radius) - 4px);
-  background: rgba(12, 18, 24, 0.42);
+  background: var(--glass-control);
 }
 
 .settings-status-grid strong {
@@ -3418,7 +3459,7 @@ textarea:focus {
   border-radius: calc(var(--radius) - 4px);
   background:
     linear-gradient(135deg, rgba(55, 201, 167, 0.08), transparent 70%),
-    rgba(12, 18, 24, 0.34);
+    var(--glass-control);
   cursor: pointer;
 }
 
@@ -3719,9 +3760,9 @@ textarea:focus {
   place-items: center;
   gap: 12px;
   min-height: 430px;
-  border: 1px dashed var(--line-strong);
+  border: 1px dashed var(--glass-border-strong);
   border-radius: var(--radius);
-  background: #10161d;
+  background: var(--glass-fill-soft);
   color: var(--muted);
   cursor: pointer;
   overflow: hidden;
@@ -3902,9 +3943,9 @@ textarea:focus {
      tab(s) clipped off entirely. Scroll it horizontally instead. */
   overflow-x: auto;
   padding: 4px;
-  border: 1px solid var(--line);
+  border: 1px solid var(--glass-border);
   border-radius: var(--radius);
-  background: #10161d;
+  background: var(--glass-input);
 }
 
 .segmented button {
@@ -3914,7 +3955,8 @@ textarea:focus {
 }
 
 .segmented button.active {
-  background: #24313d;
+  background: var(--glass-control-hover);
+  box-shadow: var(--glass-edge);
   color: var(--text);
 }
 
@@ -4848,7 +4890,7 @@ textarea:focus {
   border-left: 1px solid var(--line);
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 60%),
-    rgba(13, 18, 25, 0.96);
+    transparent;
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -5042,7 +5084,7 @@ textarea:focus {
   border-color: rgba(55, 201, 167, 0.55);
   background:
     linear-gradient(135deg, rgba(55, 201, 167, 0.18), transparent),
-    #1c2832;
+    var(--glass-control-hover);
   color: var(--accent);
 }
 
@@ -6673,4 +6715,419 @@ textarea:focus {
   .back-to-top {
     bottom: max(24px, env(safe-area-inset-bottom));
   }
+}
+
+/* ═════════════════════════════════════════════════════════════════════════
+   Liquid Glass -- site-wide surface system
+   ─────────────────────────────────────────────────────────────────────────
+   Every panel, card, control, menu and overlay is frosted glass over the
+   gallery background: a translucent tinted fill (--glass-fill*), a bright
+   hairline border, an inset specular edge (--glass-edge) and a live
+   backdrop blur+saturate (--glass-blur). The gallery background image
+   itself (.app-shell::before/::after) is deliberately NOT glass -- it's the
+   scene the glass refracts. Tokens live on :root / the theme classes at the
+   top of this file, so light mode and the user's accent colour carry
+   through automatically.
+
+   Blur is applied three ways, by cost:
+     - panels + floating chrome: full --glass-blur
+     - repeated cards/controls: --glass-blur-soft (and dropped on perf-lite,
+       where the translucent fill alone still reads as glass)
+     - the topbar: on a ::before layer instead of the element itself, because
+       backdrop-filter (like transform) makes an element the containing block
+       for position:fixed descendants, and .primary-nav is a fixed bottom bar
+       *inside* the topbar on phones (see the .topbar.liquid-glass note above).
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* Ambient colour behind the glass for the moments no gallery background
+   image is loaded yet (first paint, or the rotation endpoint is down) --
+   frosted glass over flat #0e1217 would just look grey. */
+.app-shell {
+  background:
+    radial-gradient(60vmax 60vmax at 8% 4%, color-mix(in srgb, var(--accent) 26%, transparent), transparent 60%),
+    radial-gradient(55vmax 55vmax at 96% 12%, color-mix(in srgb, var(--accent-2) 22%, transparent), transparent 62%),
+    radial-gradient(50vmax 50vmax at 70% 100%, rgba(186, 104, 255, 0.18), transparent 60%),
+    var(--bg);
+}
+
+/* ── Large panels ───────────────────────────────────────────────────────── */
+.filter-rail,
+.list-panel,
+.detail-panel,
+.content-panel,
+.side-box,
+.auth-card,
+.create-box,
+.comments-panel,
+.media-stage,
+.detail-side,
+.upload-drop,
+.stacked-form,
+.page-head,
+.notice,
+.empty-state,
+.discover-search,
+.collection-inline-panel,
+.collection-add-panel,
+.leaderboard,
+.studio-analytics,
+.studio-bulk-bar,
+.search-page-form,
+.project-card,
+.settings-cluster,
+.upload-progress-wrap,
+.gallery-loading-panel {
+  border: 1px solid var(--glass-border);
+  background: var(--glass-fill);
+  box-shadow: var(--glass-edge), var(--glass-shadow);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+
+.page-head {
+  border-radius: calc(var(--radius) + 6px);
+  background:
+    linear-gradient(120deg, color-mix(in srgb, var(--accent) 14%, transparent), transparent 46%),
+    var(--glass-fill);
+}
+
+/* The media stage frames the image/video itself -- a deeper tint keeps
+   photos reading true against it while the rim stays glass. */
+.media-stage {
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.02)),
+    rgba(8, 11, 18, 0.42);
+}
+
+/* Panels nested inside panels would double the tint; keep them clear. */
+:is(.content-panel, .detail-panel, .list-panel, .side-box, .settings-cluster) :is(.side-box, .notice, .empty-state, .settings-cluster) {
+  background: var(--glass-fill-soft);
+  box-shadow: var(--glass-edge);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* ── Cards ──────────────────────────────────────────────────────────────── */
+.media-card,
+.user-card,
+.studio-item,
+.friend-request,
+.comment,
+.metric,
+.profile-stat-card,
+.collection-candidate,
+.admin-report-row,
+.comment-reply,
+.nav-more-item,
+.collection-detail-head > span,
+.profile-owner-pill,
+.totp-recovery-codes li,
+.api-key-reveal code {
+  border-color: var(--glass-border);
+  background: var(--glass-fill-soft);
+  box-shadow: var(--glass-edge);
+  backdrop-filter: var(--glass-blur-soft);
+  -webkit-backdrop-filter: var(--glass-blur-soft);
+}
+
+.media-card {
+  border-color: color-mix(in srgb, var(--accent) 20%, var(--glass-border));
+  background:
+    radial-gradient(circle at top right, color-mix(in srgb, var(--accent) 12%, transparent), transparent 42%),
+    var(--glass-fill-soft);
+  box-shadow: var(--glass-edge), 0 10px 30px rgba(0, 0, 0, 0.18);
+}
+
+.media-card:hover,
+.user-card:hover,
+.studio-item:hover {
+  border-color: var(--glass-border-strong);
+}
+
+.thumb-frame,
+.studio-thumb,
+.admin-report-thumb,
+.collection-candidate img,
+.profile-media-mini img,
+.profile-media-mini .video-thumb-placeholder,
+.project-card-logo {
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.card-actions {
+  border-top-color: var(--glass-border);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.skeleton-card,
+.skeleton-row {
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.12) 50%, rgba(255, 255, 255, 0.05) 100%);
+  background-size: 200% 100%;
+  border-color: var(--glass-border);
+}
+
+/* ── Controls ───────────────────────────────────────────────────────────── */
+.nav-item {
+  border-color: var(--glass-border);
+  background: var(--glass-control);
+}
+
+.nav-item.active {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--glass-border));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16), transparent 70%),
+    color-mix(in srgb, var(--accent) 26%, transparent);
+  color: var(--text);
+}
+
+.card-actions button,
+.chip-row span,
+.pager span,
+.account-badge,
+.topbar-search,
+.category-pill,
+.reaction-pill,
+.search-tab-count,
+.load-more-row button,
+.category-chip-row a,
+.category-chip-row button,
+.notification-row-icon,
+.cmdk-row-icon,
+.report-status-pill,
+.leaderboard-list img,
+.leaderboard-avatar-fallback {
+  border-color: var(--glass-border);
+  background: var(--glass-control);
+  box-shadow: var(--glass-edge);
+}
+
+.chip-row span {
+  color: var(--text);
+}
+
+.topbar-search:hover,
+.load-more-row button:hover:not(:disabled),
+.category-chip-row a:hover,
+.category-chip-row button:hover {
+  border-color: var(--glass-border-strong);
+  background: var(--glass-control-hover);
+}
+
+.filter-chip,
+.tag-cloud button {
+  border-color: var(--glass-border);
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%),
+    var(--glass-control);
+  box-shadow: var(--glass-edge);
+}
+
+.filter-chip:hover,
+.tag-cloud button:hover {
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--accent) 24%, transparent), transparent 70%),
+    var(--glass-control-hover);
+}
+
+.segmented {
+  border-color: var(--glass-border);
+  background: var(--glass-input);
+}
+
+/* Native <option> popups can't render translucency (they'd show the OS
+   default white-on-transparent mess), so give them a solid equivalent. */
+select option {
+  background: #161c26;
+  color: #eef4f8;
+}
+
+/* Small labels sitting directly on media (kind badge, rank, stage nav,
+   quality bar): darker glass pucks so they stay legible on any photo. */
+.kind-badge,
+.trending-rank,
+.detail-stage-nav,
+.quality-bar,
+.studio-select {
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(10, 14, 22, 0.38);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  backdrop-filter: blur(12px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+}
+
+/* ── Topbar: floating glass bar ─────────────────────────────────────────── */
+.topbar,
+.topbar.liquid-glass {
+  top: 10px;
+  margin: 10px 14px 0;
+  border: 1px solid var(--glass-border);
+  border-radius: calc(var(--radius) + 6px);
+  background: transparent;
+  box-shadow: var(--glass-edge), var(--glass-shadow);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.topbar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--accent) 12%, transparent), transparent 42%),
+    var(--glass-fill);
+  backdrop-filter: var(--glass-blur) url(#liquid-glass-refraction);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+
+.gallery-theme-light .topbar {
+  background: transparent;
+}
+
+@media (prefers-color-scheme: light) {
+  .gallery-theme-system .topbar {
+    background: transparent;
+  }
+}
+
+/* ── Floating chrome, menus and modals ──────────────────────────────────── */
+.notification-panel,
+.cmdk-panel,
+.nav-more-sheet,
+.vp-menu,
+.toast,
+.loading-tip,
+.site-announcement-banner {
+  border: 1px solid var(--glass-border);
+  background: var(--glass-fill-strong);
+  box-shadow: var(--glass-edge), var(--glass-shadow);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+
+.bg-music-toggle,
+.back-to-top {
+  border: 1px solid var(--glass-border);
+  background: var(--glass-fill);
+  box-shadow: var(--glass-edge), var(--glass-shadow);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+}
+
+.lb-panel {
+  border: 1px solid var(--glass-border);
+  background: var(--glass-fill);
+  box-shadow: var(--glass-edge), 0 30px 90px rgba(0, 0, 0, 0.45);
+}
+
+.lb-media {
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.lb-close,
+.lb-nav {
+  border: 1px solid var(--glass-border);
+  background: rgba(12, 16, 24, 0.36);
+  color: #fff;
+}
+
+.lb-backdrop,
+.cmdk-backdrop,
+.nav-more-scrim {
+  background: rgba(6, 9, 16, 0.42);
+  backdrop-filter: blur(14px) saturate(140%);
+  -webkit-backdrop-filter: blur(14px) saturate(140%);
+}
+
+.lb-backdrop {
+  background: rgba(4, 6, 12, 0.62);
+}
+
+/* Phones: the primary nav is a fixed bottom tab bar -- its own glass slab. */
+@media (max-width: 820px) {
+  .topbar,
+  .topbar.liquid-glass {
+    top: 8px;
+    margin: 8px 8px 0;
+  }
+
+  .primary-nav {
+    border-top: 1px solid var(--glass-border);
+    background: var(--glass-fill-strong);
+    box-shadow: var(--glass-edge), 0 -10px 30px rgba(0, 0, 0, 0.2);
+    backdrop-filter: var(--glass-blur);
+    -webkit-backdrop-filter: var(--glass-blur);
+  }
+}
+
+/* ── Light theme touches ────────────────────────────────────────────────── */
+.gallery-theme-light select option {
+  background: #ffffff;
+  color: #101923;
+}
+
+.gallery-theme-light .kind-badge,
+.gallery-theme-light .trending-rank {
+  color: #fff;
+}
+
+@media (prefers-color-scheme: light) {
+  .gallery-theme-system select option {
+    background: #ffffff;
+    color: #101923;
+  }
+}
+
+/* ── Budgets & accessibility ────────────────────────────────────────────── */
+/* perf-lite (phones, Opera, reduced-motion): keep live blur on the handful
+   of big surfaces, but not on every repeated card/control -- the tinted
+   translucent fill still reads as glass there. */
+.perf-lite .topbar {
+  background: transparent;
+}
+
+.perf-lite .topbar::before {
+  backdrop-filter: var(--glass-blur-soft);
+  -webkit-backdrop-filter: var(--glass-blur-soft);
+}
+
+.perf-lite :is(.media-card, .user-card, .studio-item, .friend-request, .comment, .metric, .profile-stat-card, .collection-candidate, .admin-report-row, .comment-reply, .kind-badge, .trending-rank, .studio-select, .detail-stage-nav, .quality-bar) {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.perf-lite :is(.filter-rail, .list-panel, .detail-panel, .content-panel, .side-box, .auth-card, .create-box, .comments-panel, .media-stage, .detail-side, .upload-drop, .stacked-form, .page-head, .notice, .empty-state, .discover-search, .leaderboard, .studio-analytics, .settings-cluster, .project-card) {
+  backdrop-filter: var(--glass-blur-soft);
+  -webkit-backdrop-filter: var(--glass-blur-soft);
+}
+
+/* The OS "reduce transparency" setting gets solid, readable surfaces. */
+@media (prefers-reduced-transparency: reduce) {
+  :root,
+  .app-shell {
+    --glass-fill: rgba(21, 27, 34, 0.96);
+    --glass-fill-soft: rgba(21, 27, 34, 0.96);
+    --glass-fill-strong: rgba(21, 27, 34, 0.98);
+    --site-background-strength: 0.2;
+  }
+
+  .app-shell.gallery-theme-light {
+    --glass-fill: rgba(255, 255, 255, 0.97);
+    --glass-fill-soft: rgba(255, 255, 255, 0.97);
+    --glass-fill-strong: rgba(255, 255, 255, 0.98);
+  }
+
+  .app-shell *,
+  .app-shell *::before {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+}
+
+/* Keep the lightbox's floating close button from sitting on top of the
+   info column's "Full page" button. */
+.lb-info-top {
+  padding-right: 40px;
 }
