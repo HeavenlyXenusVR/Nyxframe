@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { Upload, WandSparkles } from "lucide-react";
+import { Clipboard, FileImage, FileVideo, RefreshCw, Trash2, Upload, WandSparkles } from "lucide-react";
 import { apiFetch, clearApiCache, postClientDiagnostic, readToken, resolveApiUrl } from "../api.js";
 import { MAX_UPLOAD_BYTES } from "../config.js";
 import { addPendingUploadJob } from "../uploadJobs.js";
-import { ChipRow, Page, RequireLogin } from "../components/ui.jsx";
+import { ChipRow, Page, RequireLogin, Segmented } from "../components/ui.jsx";
+import { formatBytes } from "../utils/format.js";
 
 const SUBCATEGORY_SLOT_COUNT = 3;
 const EDGE_SAFE_UPLOAD_BYTES = 80 * 1024 * 1024;
@@ -16,8 +17,87 @@ const DEFAULT_CHUNK_BYTES = 20 * 1024 * 1024;
 // connection would hang forever with no error surfaced to the user.
 const UPLOAD_TIMEOUT_MS = 120_000;
 
+// What each subcategory slot usually holds -- the labels and placeholders
+// the old six-field grid used, kept as the one-row version's guidance.
+const SUBCATEGORY_SLOTS = [
+  { label: "Series or group", placeholder: "e.g. Final Fantasy" },
+  { label: "Character or subject", placeholder: "e.g. Cloud Strife" },
+  { label: "Variant or context", placeholder: "e.g. Advent Children" },
+];
+
+const VISIBILITY_OPTIONS = [
+  ["public", "Public"],
+  ["unlisted", "Unlisted"],
+  ["private", "Private"],
+];
+
+const VISIBILITY_HINTS = {
+  public: "Anyone can find it in Discover, search and your profile.",
+  unlisted: "Only people with the link can see it. Hidden from Discover and search.",
+  private: "Only you can see it.",
+};
+
+const OPTION_TOGGLES = [
+  { key: "auto_ai", label: "AI metadata", hint: "After upload, fill in any title, category or tags you left blank." },
+  { key: "is_adult", label: "18+", hint: "Only shown to viewers who have verified their age." },
+  { key: "comments_enabled", label: "Comments", hint: "Let people comment on this post." },
+  { key: "downloads_enabled", label: "Downloads", hint: "Show the download button on this post." },
+  { key: "check_site_duplicates", label: "Check the whole site for duplicates", hint: "Warn if a similar post exists anywhere on Nyxframe, not just in your uploads." },
+];
+
 function blankSubcategorySlots() {
   return Array.from({ length: SUBCATEGORY_SLOT_COUNT }, () => "");
+}
+
+function sameName(a, b) {
+  return String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+}
+
+function findCategory(categories, text) {
+  if (!String(text || "").trim()) return null;
+  return (categories || []).find((category) => sameName(category.name, text)) || null;
+}
+
+function subcategoriesOf(category) {
+  return category?.subcategories || category?.children || [];
+}
+
+// Category and subcategories are single type-or-pick fields now: a name that
+// matches an existing entry is sent as its id, anything else as a new name to
+// create -- the same two request shapes the old select + "New ..." input
+// pairs produced, without making the uploader choose between two fields.
+function resolvePlacement(categories, categoryText, subcategoryTexts) {
+  const category = findCategory(categories, categoryText);
+  const existingSubs = subcategoriesOf(category);
+  const subcategoryIds = [];
+  const subcategoryNames = [];
+  normalizeSlots(subcategoryTexts).forEach((text) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    const match = existingSubs.find((sub) => sameName(sub.name, trimmed));
+    if (match) subcategoryIds.push(String(match.id));
+    else subcategoryNames.push(trimmed);
+  });
+  return {
+    categoryId: category ? String(category.id) : "",
+    categoryName: category ? "" : String(categoryText || "").trim(),
+    subcategoryIds,
+    subcategoryNames,
+  };
+}
+
+function isAcceptedFile(file) {
+  return Boolean(file && (file.type.startsWith("image/") || file.type.startsWith("video/")));
+}
+
+function formatDuration(seconds) {
+  const total = Math.round(Number(seconds) || 0);
+  const minutes = Math.floor(total / 60);
+  return `${minutes}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function parseTags(text) {
+  return String(text || "").split(",").map((tag) => tag.trim()).filter(Boolean);
 }
 
 function normalizeSlots(values) {
@@ -57,10 +137,8 @@ export function UploadPage({ ctx }) {
     file: null,
     title: "",
     description: "",
-    category_id: "",
-    category_name: "",
-    subcategory_ids: blankSubcategorySlots(),
-    subcategory_names: blankSubcategorySlots(),
+    category: "",
+    subcategories: blankSubcategorySlots(),
     tags: "",
     is_adult: false,
     visibility: "public",
@@ -72,15 +150,17 @@ export function UploadPage({ ctx }) {
     check_site_duplicates: true,
   });
   const [preview, setPreview] = useState("");
+  const [mediaInfo, setMediaInfo] = useState(null); // { width, height, duration }
   const [busy, setBusy] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0); // 0–100
   const [dragActive, setDragActive] = useState(false);
   const [analysis, setAnalysis] = useState(null);
   const [duplicates, setDuplicates] = useState([]);
-  const dropZoneRef = useRef(null);
+  const dragDepth = useRef(0);
 
   useEffect(() => {
+    setMediaInfo(null);
     if (!form.file) {
       setPreview("");
       return undefined;
@@ -92,47 +172,77 @@ export function UploadPage({ ctx }) {
 
   useEffect(() => {
     setDuplicates([]);
+    setAnalysis(null);
   }, [form.file]);
+
+  // Paste an image straight from the clipboard (a screenshot, a copied
+  // image) -- but never hijack a paste into a text field.
+  useEffect(() => {
+    function onPaste(event) {
+      const target = event.target;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+      const file = [...(event.clipboardData?.files || [])].find(isAcceptedFile);
+      if (!file) return;
+      event.preventDefault();
+      pickFile(file);
+    }
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  });
 
   if (!ctx.user) return <RequireLogin />;
 
-  function handleDragOver(event) {
+  function pickFile(file) {
+    if (!file) return;
+    if (!isAcceptedFile(file)) {
+      ctx.showToast("Only image and video files can be uploaded.", "error");
+      return;
+    }
+    update("file", file);
+  }
+
+  // The whole page is a drop target. dragenter/dragleave fire for every
+  // child element crossed, so count depth instead of trusting relatedTarget.
+  function handleDragEnter(event) {
+    if (![...(event.dataTransfer?.types || [])].includes("Files")) return;
     event.preventDefault();
-    event.stopPropagation();
+    dragDepth.current += 1;
     setDragActive(true);
   }
 
-  function handleDragLeave(event) {
+  function handleDragOver(event) {
+    if (![...(event.dataTransfer?.types || [])].includes("Files")) return;
     event.preventDefault();
-    event.stopPropagation();
-    // Only deactivate if we've left the drop zone entirely
-    if (!dropZoneRef.current?.contains(event.relatedTarget)) {
-      setDragActive(false);
-    }
+  }
+
+  function handleDragLeave(event) {
+    if (![...(event.dataTransfer?.types || [])].includes("Files")) return;
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (!dragDepth.current) setDragActive(false);
   }
 
   function handleDrop(event) {
     event.preventDefault();
-    event.stopPropagation();
+    dragDepth.current = 0;
     setDragActive(false);
-    const file = event.dataTransfer?.files?.[0];
-    if (file && (file.type.startsWith("image/") || file.type.startsWith("video/"))) {
-      update("file", file);
-    } else if (file) {
-      ctx.showToast("Only image and video files are accepted.", "error");
-    }
+    pickFile(event.dataTransfer?.files?.[0]);
   }
 
   function update(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
   }
 
-  function updateSubcategorySlot(kind, index, value) {
+  function updateSubcategory(index, value) {
     setForm((current) => {
-      const next = normalizeSlots(current[kind]);
+      const next = normalizeSlots(current.subcategories);
       next[index] = value;
-      return { ...current, [kind]: next };
+      return { ...current, subcategories: next };
     });
+  }
+
+  function removeFile() {
+    update("file", null);
+    setUploadProgress(0);
   }
 
   async function analyze() {
@@ -165,11 +275,12 @@ export function UploadPage({ ctx }) {
       const data = await apiFetch("/api/media/analyze", { method: "POST", body, timeoutMs: UPLOAD_TIMEOUT_MS });
       setAnalysis(data.analysis);
       setDuplicates(data.possible_duplicates || []);
+      // Only fills gaps -- anything the uploader already typed wins.
       setForm((current) => ({
         ...current,
         title: current.title || data.analysis?.title || "",
-        category_name: current.category_name || data.analysis?.category_name || "",
-        subcategory_names: normalizeSlots(current.subcategory_names).map((value, index) => {
+        category: current.category || data.analysis?.category_name || "",
+        subcategories: normalizeSlots(current.subcategories).map((value, index) => {
           if (value) return value;
           return String(data.analysis?.subcategory_names?.[index] || "");
         }),
@@ -187,7 +298,7 @@ export function UploadPage({ ctx }) {
   async function submit(event) {
     event.preventDefault();
     if (!form.file) return ctx.showToast("Choose a file first.", "error");
-    if (form.file.size > MAX_UPLOAD_BYTES) return ctx.showToast("Upload is over the configured size limit.", "error");
+    if (form.file.size > MAX_UPLOAD_BYTES) return ctx.showToast(`This file is over the ${formatBytes(MAX_UPLOAD_BYTES)} upload limit.`, "error");
     if (duplicates.length) {
       const proceed = window.confirm(
         `This looks similar to ${duplicates.length} post${duplicates.length === 1 ? "" : "s"} already in your library. Upload anyway?`,
@@ -213,15 +324,13 @@ export function UploadPage({ ctx }) {
       if (form.file) body.set("file", form.file);
       body.set("title", form.title);
       body.set("description", form.description);
-      body.set("category_id", form.category_id);
-      body.set("category_name", form.category_name);
-      body.set("subcategory_id", form.subcategory_ids.find(Boolean) || "");
-      body.set("subcategory_name", form.subcategory_names.find((value) => value.trim()) || "");
-      body.set("subcategory_ids_json", JSON.stringify(normalizeSlots(form.subcategory_ids).filter(Boolean)));
-      body.set(
-        "subcategory_names_json",
-        JSON.stringify(normalizeSlots(form.subcategory_names).map((value) => value.trim()).filter(Boolean)),
-      );
+      const placement = resolvePlacement(ctx.lookups.categories, form.category, form.subcategories);
+      body.set("category_id", placement.categoryId);
+      body.set("category_name", placement.categoryName);
+      body.set("subcategory_id", placement.subcategoryIds[0] || "");
+      body.set("subcategory_name", placement.subcategoryNames[0] || "");
+      body.set("subcategory_ids_json", JSON.stringify(placement.subcategoryIds));
+      body.set("subcategory_names_json", JSON.stringify(placement.subcategoryNames));
       body.set("tags", form.tags);
       body.set("is_adult", String(form.is_adult));
       body.set("visibility", form.visibility);
@@ -330,44 +439,123 @@ export function UploadPage({ ctx }) {
     }
   }
 
-  const selectedCategory = ctx.lookups.categories.find((category) => String(category.id) === String(form.category_id));
-  const subcategories = selectedCategory?.subcategories || selectedCategory?.children || [];
+  const categories = ctx.lookups.categories || [];
+  const matchedCategory = findCategory(categories, form.category);
+  const existingSubcategories = subcategoriesOf(matchedCategory);
+  const isVideo = form.file?.type?.startsWith("video/");
+  const tooBig = Boolean(form.file && form.file.size > MAX_UPLOAD_BYTES);
+  const tooBigToAnalyze = Boolean(form.file && form.file.size > EDGE_SAFE_UPLOAD_BYTES);
+  const tagList = parseTags(form.tags);
   const analysisChips = analysis
     ? [analysis.media_kind, analysis.source, analysis.category_name, ...(analysis.subcategory_names || []), ...((analysis.tags || []).slice(0, 4))].filter(Boolean)
     : [];
+  const uploading = busy && !analyzing;
+  const fileFacts = form.file
+    ? [
+      isVideo ? "Video" : "Image",
+      formatBytes(form.file.size),
+      mediaInfo?.width ? `${mediaInfo.width}×${mediaInfo.height}` : "",
+      mediaInfo?.duration ? formatDuration(mediaInfo.duration) : "",
+    ].filter(Boolean)
+    : [];
+  let status = "Choose a file to get started.";
+  if (uploading) status = uploadProgress >= 100 ? "Finishing up…" : `Uploading… ${uploadProgress}%`;
+  else if (analyzing) status = "Analyzing with AI…";
+  else if (tooBig) status = `Over the ${formatBytes(MAX_UPLOAD_BYTES)} limit — choose a smaller file.`;
+  else if (form.file && !form.title.trim() && !form.auto_ai) status = "Add a title, or turn on AI metadata to fill it in.";
+  else if (form.file) status = `Ready · ${form.file.name}`;
 
   return (
-    <Page title="Upload" eyebrow="Create">
-      <form className="upload-layout" onSubmit={submit}>
-        <section
-          ref={dropZoneRef}
-          className={`upload-drop${dragActive ? " drag-active" : ""}`}
-          onDragOver={handleDragOver}
-          onDragEnter={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-        >
-          <label className="file-picker">
-            <input type="file" accept="image/*,video/*" onChange={(event) => update("file", event.target.files?.[0] || null)} />
-            {preview ? (form.file?.type?.startsWith("video/") ? <video src={preview} muted playsInline /> : <img src={preview} alt="" />) : (
-              <>
-                <Upload size={42} />
-                <span className="file-picker-hint">{dragActive ? "Drop to upload" : "Click or drag a file here"}</span>
-              </>
-            )}
-            <span>{form.file?.name || ""}</span>
-          </label>
-          {busy && uploadProgress > 0 && uploadProgress < 100 ? (
-            <div className="upload-progress-wrap" aria-label={`Upload progress: ${uploadProgress}%`}>
-              <div className="upload-progress-bar" style={{ width: `${uploadProgress}%` }} />
-              <span className="upload-progress-label">{uploadProgress}%</span>
+    <Page
+      title="Upload"
+      eyebrow="Create"
+      lede="Add an image or video to the gallery. Drop a file anywhere on this page, or paste one from your clipboard."
+    >
+      <form
+        className={`upload-page${dragActive ? " is-dragging" : ""}`}
+        onSubmit={submit}
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        {dragActive ? (
+          <div className="upload-drop-overlay" aria-hidden="true">
+            <Upload size={36} />
+            <strong>Drop to add this file</strong>
+          </div>
+        ) : null}
+
+        <aside className="upload-media">
+          {!form.file ? (
+            <label className="upload-dropzone">
+              <input type="file" accept="image/*,video/*" onChange={(event) => { pickFile(event.target.files?.[0]); event.target.value = ""; }} />
+              <span className="upload-dropzone-icon"><Upload size={28} /></span>
+              <strong>Drop an image or video</strong>
+              <span className="upload-dropzone-cta">Choose a file</span>
+              <small>Images, GIFs and videos · up to {formatBytes(MAX_UPLOAD_BYTES)}</small>
+              <small className="upload-dropzone-paste"><Clipboard size={13} />You can also paste an image</small>
+            </label>
+          ) : (
+            <div className="upload-file-card">
+              <div className="upload-preview">
+                {!preview ? null : isVideo ? (
+                  <video
+                    src={preview}
+                    controls
+                    muted
+                    playsInline
+                    onLoadedMetadata={(event) => setMediaInfo({ width: event.currentTarget.videoWidth, height: event.currentTarget.videoHeight, duration: event.currentTarget.duration })}
+                  />
+                ) : (
+                  <img
+                    src={preview}
+                    alt="Preview of the file you picked"
+                    onLoad={(event) => setMediaInfo({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
+                  />
+                )}
+              </div>
+              <div className="upload-file-meta">
+                {isVideo ? <FileVideo size={18} /> : <FileImage size={18} />}
+                <div>
+                  <strong title={form.file.name}>{form.file.name}</strong>
+                  <span>{fileFacts.join(" · ")}</span>
+                </div>
+              </div>
+              {tooBig ? (
+                <p className="upload-file-error" role="alert">
+                  This file is {formatBytes(form.file.size)}, over the {formatBytes(MAX_UPLOAD_BYTES)} upload limit.
+                </p>
+              ) : null}
+              <div className="upload-file-actions">
+                <label className={`button-link${uploading ? " is-disabled" : ""}`}>
+                  <RefreshCw size={15} />Replace
+                  <input type="file" accept="image/*,video/*" disabled={uploading} onChange={(event) => { pickFile(event.target.files?.[0]); event.target.value = ""; }} />
+                </label>
+                <button type="button" onClick={removeFile} disabled={uploading}><Trash2 size={15} />Remove</button>
+              </div>
             </div>
-          ) : null}
-          {analysis ? <ChipRow values={analysisChips} /> : null}
-          {analysis?.reason ? <p className="muted small">{analysis.reason}</p> : null}
+          )}
+
+          <section className="upload-ai" aria-label="AI auto-fill">
+            <div className="upload-ai-copy">
+              <h3><WandSparkles size={16} />AI auto-fill</h3>
+              <p>Suggests a title, category, subcategories and tags from the file. Anything you&rsquo;ve already typed is kept.</p>
+            </div>
+            <button
+              type="button"
+              onClick={analyze}
+              disabled={busy || !form.file || tooBigToAnalyze}
+              title={tooBigToAnalyze ? "Too large to analyze here — upload directly instead; AI metadata still runs automatically." : undefined}
+            ><WandSparkles size={16} />{analyzing ? "Analyzing…" : "Analyze with AI"}</button>
+            {tooBigToAnalyze ? <p className="muted small">This file is too large to analyze before uploading. AI metadata still runs after upload if it&rsquo;s turned on.</p> : null}
+            {analysis ? <ChipRow values={analysisChips} /> : null}
+            {analysis?.reason ? <p className="muted small">{analysis.reason}</p> : null}
+          </section>
+
           {duplicates.length ? (
             <div className="upload-duplicate-warning" role="alert">
-              <p className="muted small">
+              <p className="small">
                 Looks similar to {duplicates.length} post{duplicates.length === 1 ? "" : "s"} already in your library:
               </p>
               <div className="upload-duplicate-thumbs">
@@ -379,53 +567,117 @@ export function UploadPage({ ctx }) {
               </div>
             </div>
           ) : null}
-        </section>
-        <section className="stacked-form">
-          <label className="field"><span>Title</span><input value={form.title} onChange={(event) => update("title", event.target.value)} required maxLength={160} /></label>
-          <label className="field"><span>Description</span><textarea value={form.description} onChange={(event) => update("description", event.target.value)} rows={4} maxLength={2000} /></label>
-          <div className="two-col">
-            <label className="field"><span>Category</span><select value={form.category_id} onChange={(event) => setForm((current) => ({ ...current, category_id: event.target.value, category_name: event.target.value ? "" : current.category_name, subcategory_ids: blankSubcategorySlots() }))}><option value="">New category</option>{ctx.lookups.categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
-            <label className="field"><span>New category</span><input value={form.category_name} onChange={(event) => update("category_name", event.target.value)} disabled={Boolean(form.category_id)} /></label>
-          </div>
-          {Array.from({ length: SUBCATEGORY_SLOT_COUNT }, (_, index) => (
-            <div className="two-col" key={`subcategory-slot-${index}`}>
-              <label className="field">
-                <span>{`Subcategory ${index + 1}`}</span>
-                <select value={normalizeSlots(form.subcategory_ids)[index]} onChange={(event) => updateSubcategorySlot("subcategory_ids", index, event.target.value)} disabled={!subcategories.length}>
-                  <option value="">None</option>
-                  {subcategories.map((subcategory) => <option key={subcategory.id} value={subcategory.id}>{subcategory.name}</option>)}
-                </select>
-              </label>
-              <label className="field">
-                <span>{`New subcategory ${index + 1}`}</span>
-                <input value={normalizeSlots(form.subcategory_names)[index]} onChange={(event) => updateSubcategorySlot("subcategory_names", index, event.target.value)} placeholder={index === 0 ? "Series or group" : index === 1 ? "Character or subject" : "Variant or context"} />
-              </label>
+        </aside>
+
+        <div className="upload-form">
+          <section className="upload-section">
+            <h2>Details</h2>
+            <label className="field">
+              <span className="field-head">Title<small aria-hidden="true">{form.title.length}/160</small></span>
+              <input value={form.title} onChange={(event) => update("title", event.target.value)} required={!form.auto_ai} maxLength={160} placeholder={form.auto_ai ? "Leave blank to let AI name it" : "Give it a name"} />
+            </label>
+            <label className="field">
+              <span className="field-head">Description<small aria-hidden="true">{form.description.length}/2000</small></span>
+              <textarea value={form.description} onChange={(event) => update("description", event.target.value)} rows={4} maxLength={2000} placeholder="Optional" />
+            </label>
+            <label className="field">
+              <span>Tags</span>
+              <input value={form.tags} onChange={(event) => update("tags", event.target.value)} placeholder="cloud, aria, wallpaper" />
+              <small className="field-hint">Separate tags with commas.</small>
+            </label>
+            {tagList.length ? <ChipRow values={tagList.map((tag) => `#${tag}`)} /> : null}
+          </section>
+
+          <section className="upload-section">
+            <h2>Where it goes</h2>
+            <label className="field">
+              <span className="field-head">
+                Category
+                {form.category.trim() ? <small className={`placement-badge ${matchedCategory ? "is-existing" : "is-new"}`}>{matchedCategory ? "Existing" : "New — created on upload"}</small> : null}
+              </span>
+              <input
+                list="upload-category-options"
+                value={form.category}
+                onChange={(event) => update("category", event.target.value)}
+                placeholder={categories.length ? `e.g. ${categories[0].name}` : "Type a category"}
+                autoComplete="off"
+              />
+              <datalist id="upload-category-options">
+                {categories.map((category) => <option key={category.id} value={category.name} />)}
+              </datalist>
+              <small className="field-hint">Pick an existing category or type a new one.</small>
+            </label>
+            <div className="upload-subcategories">
+              {SUBCATEGORY_SLOTS.map((slot, index) => {
+                const text = normalizeSlots(form.subcategories)[index];
+                const isExisting = existingSubcategories.some((sub) => sameName(sub.name, text));
+                return (
+                  <label className="field" key={slot.label}>
+                    <span className="field-head">
+                      {slot.label}
+                      {text.trim() ? <small className={`placement-badge ${isExisting ? "is-existing" : "is-new"}`}>{isExisting ? "Existing" : "New"}</small> : null}
+                    </span>
+                    <input
+                      list="upload-subcategory-options"
+                      value={text}
+                      onChange={(event) => updateSubcategory(index, event.target.value)}
+                      placeholder={slot.placeholder}
+                      autoComplete="off"
+                    />
+                  </label>
+                );
+              })}
+              <datalist id="upload-subcategory-options">
+                {existingSubcategories.map((sub) => <option key={sub.id} value={sub.name} />)}
+              </datalist>
             </div>
-          ))}
-          <label className="field"><span>Tags</span><input value={form.tags} onChange={(event) => update("tags", event.target.value)} placeholder="comma separated" /></label>
-          <div className="two-col">
-            <label className="field"><span>Visibility</span><select value={form.visibility} onChange={(event) => update("visibility", event.target.value)}><option value="public">Public</option><option value="unlisted">Unlisted</option><option value="private">Private</option></select></label>
-            <label className="field"><span>Schedule for later <small>(optional)</small></span><input type="datetime-local" value={form.publish_at} onChange={(event) => update("publish_at", event.target.value)} /></label>
-          </div>
-          <div className="two-col">
-            <div className="check-stack">
-              <label className="check-row"><input checked={form.auto_ai} onChange={(event) => update("auto_ai", event.target.checked)} type="checkbox" />AI metadata</label>
-              <label className="check-row"><input checked={form.is_adult} onChange={(event) => update("is_adult", event.target.checked)} type="checkbox" />18+</label>
-              <label className="check-row"><input checked={form.comments_enabled} onChange={(event) => update("comments_enabled", event.target.checked)} type="checkbox" />Comments</label>
-              <label className="check-row"><input checked={form.downloads_enabled} onChange={(event) => update("downloads_enabled", event.target.checked)} type="checkbox" />Downloads</label>
-              <label className="check-row"><input checked={form.check_site_duplicates} onChange={(event) => update("check_site_duplicates", event.target.checked)} type="checkbox" />Check across the whole site</label>
+            <small className="field-hint">Subcategories are optional. Up to three, from broad to specific.</small>
+          </section>
+
+          <section className="upload-section">
+            <h2>Visibility &amp; options</h2>
+            <div className="field">
+              <span>Who can see it</span>
+              <Segmented value={form.visibility} onChange={(value) => update("visibility", value)} options={VISIBILITY_OPTIONS} />
+              <small className="field-hint">{VISIBILITY_HINTS[form.visibility]}</small>
             </div>
+            <label className="field">
+              <span>Schedule for later <small>(optional)</small></span>
+              <input type="datetime-local" value={form.publish_at} onChange={(event) => update("publish_at", event.target.value)} />
+              <small className="field-hint">{form.publish_at ? "It stays hidden until then." : "Leave empty to publish right away."}</small>
+            </label>
+            <div className="upload-toggles">
+              {OPTION_TOGGLES.map((option) => (
+                <label className="upload-toggle" key={option.key}>
+                  <span>
+                    <strong>{option.label}</strong>
+                    <small id={`upload-hint-${option.key}`}>{option.hint}</small>
+                  </span>
+                  <input
+                    type="checkbox"
+                    role="switch"
+                    aria-label={option.label}
+                    aria-describedby={`upload-hint-${option.key}`}
+                    checked={form[option.key]}
+                    onChange={(event) => update(option.key, event.target.checked)}
+                  />
+                </label>
+              ))}
+            </div>
+          </section>
+
+          <div className="upload-actionbar">
+            <div className="upload-status">
+              <span className={tooBig ? "is-error" : ""}>{status}</span>
+              {uploading && uploadProgress > 0 ? (
+                <div className="upload-progress-track" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={uploadProgress} aria-label="Upload progress">
+                  <div className="upload-progress-fill" style={{ width: `${uploadProgress}%` }} />
+                </div>
+              ) : null}
+            </div>
+            <button className="primary" type="submit" disabled={busy || !form.file || tooBig}><Upload size={16} />{uploading ? "Uploading" : "Upload"}</button>
           </div>
-          <div className="form-actions">
-            <button
-              type="button"
-              onClick={analyze}
-              disabled={busy || !form.file || form.file.size > EDGE_SAFE_UPLOAD_BYTES}
-              title={form.file && form.file.size > EDGE_SAFE_UPLOAD_BYTES ? "Too large to analyze here — upload directly instead; AI metadata still runs automatically." : undefined}
-            ><WandSparkles size={16} />{analyzing ? "Analyzing…" : "Analyze"}</button>
-            <button className="primary" type="submit" disabled={busy || !form.file}><Upload size={16} />{busy ? "Working" : "Upload"}</button>
-          </div>
-        </section>
+        </div>
       </form>
     </Page>
   );
