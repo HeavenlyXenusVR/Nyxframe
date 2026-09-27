@@ -5,11 +5,12 @@ import { apiFetch, cachedApiFetch, clearApiCache, toQuery } from "../api.js";
 import { PAGE_SIZE } from "../config.js";
 import { CategoryPills, DiscoverMemories, DiscoverTrending } from "../components/discover.jsx";
 import { MediaGrid } from "../components/media.jsx";
-import { EmptyState, Notice, Page, TagCloud } from "../components/ui.jsx";
-import { preloadMediaAssets, replaceMedia } from "../utils/media.js";
+import { EmptyState, Notice, Page, Segmented, TagCloud } from "../components/ui.jsx";
+import { appendUniqueMedia, preloadMediaAssets, replaceMedia } from "../utils/media.js";
 
 function timeOfDayGreeting(user) {
-  const name = user?.display_name || user?.username || "there";
+  if (!user) return "Welcome to Nyxframe";
+  const name = user.display_name || user.username;
   const hour = new Date().getHours();
   if (hour < 5) return `Still up, ${name}?`;
   if (hour < 12) return `Good morning, ${name}`;
@@ -38,6 +39,41 @@ function readStoredFilters() {
   } catch (_error) {
     return null;
   }
+}
+
+const SORT_OPTIONS = [
+  ["new", "Newest"],
+  ["trending", "Trending"],
+  ["popular", "Most liked"],
+  ["downloads", "Most downloaded"],
+  ["views", "Most viewed"],
+  ["old", "Oldest"],
+];
+
+// Heading over the results grid -- says what the grid is actually showing,
+// since the controls that shape it now live in a compact bar, not a sidebar.
+const SORT_HEADINGS = {
+  new: "Latest uploads",
+  trending: "Trending now",
+  popular: "Most liked",
+  downloads: "Most downloaded",
+  views: "Most viewed",
+  old: "From the archive",
+};
+
+// The "More filters" panel's fields -- the ones with no always-visible
+// control in the browse bar. Drives the Filters button's badge and whether
+// the panel starts open (a shared link with an uploader filter shouldn't
+// hide the field that explains the results).
+function advancedFilterCount(f) {
+  return ["uploader", "min_size", "max_size", "date_from", "date_to"].filter((key) => f[key]).length
+    + (f.adult && f.adult !== "show" ? 1 : 0);
+}
+
+function isTypingTarget(target) {
+  if (!target) return false;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable;
 }
 
 function pageSizeFor(settings) {
@@ -106,6 +142,8 @@ export function DiscoverPage({ ctx }) {
   const [viewMode, setViewMode] = useState(() => localStorage.getItem(VIEW_MODE_KEY) || "grid");
   const [savingSmart, setSavingSmart] = useState(false);
   const [savingAlert, setSavingAlert] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(() => advancedFilterCount(filters) > 0);
+  const searchRef = useRef(null);
 
   const pageRef = useRef(1);
   const filtersRef = useRef(filters);
@@ -146,7 +184,7 @@ export function DiscoverPage({ ctx }) {
       const rows = data.media || [];
       const pageItems = rows.slice(0, pageSize);
       if (append) {
-        setItems((prev) => [...prev, ...pageItems]);
+        setItems((prev) => appendUniqueMedia(prev, pageItems));
       } else {
         setItems(pageItems);
       }
@@ -191,6 +229,19 @@ export function DiscoverPage({ ctx }) {
     }, 300);
     return () => window.clearTimeout(timer);
   }, [filters]); // intentionally omit loadMedia/setSearchParams — stable refs
+
+  // "/" jumps to the search box from anywhere on the page (Ctrl+K still opens
+  // the site-wide command palette).
+  useEffect(() => {
+    function onKeyDown(event) {
+      if (event.key !== "/" || event.ctrlKey || event.metaKey || event.altKey) return;
+      if (isTypingTarget(event.target)) return;
+      event.preventDefault();
+      searchRef.current?.focus();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   // Infinite scroll sentinel
   useEffect(() => {
@@ -242,6 +293,17 @@ export function DiscoverPage({ ctx }) {
     } finally {
       setRandomPending(false);
     }
+  }
+
+  function refreshFeed() {
+    pageRef.current = 1;
+    setItems([]);
+    setHasNext(false);
+    setLoadingMore(false);
+    setLoading(true);
+    setError("");
+    clearApiCache("/api/media");
+    loadMedia({ page: 1, append: false });
   }
 
   function changeViewMode(mode) {
@@ -319,109 +381,160 @@ export function DiscoverPage({ ctx }) {
   const openLightbox = ctx.openLightbox;
   const filterChips = getFilterChips(filters, ctx.lookups.categories);
   const gridExtraClass = viewMode === "masonry" ? "media-grid-masonry" : "";
+  const advancedCount = advancedFilterCount(filters);
+  const popularTags = (ctx.lookups.tags || []).slice(0, 6).map((tag) => tag.name || tag.tag || String(tag));
+  const resultsHeading = filters.q
+    ? `Results for “${filters.q}”`
+    : `${SORT_HEADINGS[filters.sort] || "Latest uploads"}${selectedCategory ? ` in ${selectedCategory.name}` : ""}`;
 
-  return (
-    <Page
-      title="Discover"
-      eyebrow="Gallery"
-      lede="Search the archive, narrow by category or uploader, and scan the latest posts without losing your place."
-      className="page-discover"
-      actions={(
-        <>
+  const hero = (
+    <header className="discover-hero">
+      <div className="discover-hero-top">
+        <div className="discover-hero-copy">
+          <p className="discover-hero-kicker">Discover</p>
+          <h1>{timeOfDayGreeting(ctx.user)}</h1>
+          <span className="discover-hero-lede">Here&rsquo;s what the archive&rsquo;s been up to.</span>
+        </div>
+        <div className="discover-hero-actions">
           <button type="button" onClick={openRandom} disabled={randomPending}>
-            <Sparkles size={16} />{randomPending ? "Loading" : "Surprise"}
+            <Sparkles size={16} />{randomPending ? "Loading" : "Surprise me"}
           </button>
-          <button type="button" onClick={() => { pageRef.current = 1; setItems([]); setHasNext(false); setLoadingMore(false); setLoading(true); setError(""); clearApiCache("/api/media"); loadMedia({ page: 1, append: false }); }} disabled={loading}>
-            <RefreshCw size={16} />Refresh
+          <button type="button" className="icon-button" onClick={refreshFeed} disabled={loading} title="Refresh" aria-label="Refresh">
+            <RefreshCw size={16} />
           </button>
-        </>
-      )}
-    >
-      <div className="discover-greeting">
-        <strong>{timeOfDayGreeting(ctx.user)}</strong>
-        <span>Here&rsquo;s what the archive&rsquo;s been up to.</span>
+        </div>
       </div>
-
       <label className="discover-search">
-        <Search size={18} />
+        <Search size={20} />
         <input
+          ref={searchRef}
           value={filters.q}
           onChange={(e) => updateFilter("q", e.target.value)}
           type="search"
           placeholder="Search wallpapers, memes, tags…"
+          aria-label="Search the gallery"
         />
+        {filters.q ? (
+          <button type="button" className="discover-search-clear" onClick={() => updateFilter("q", "")} aria-label="Clear search">
+            <XIcon size={16} />
+          </button>
+        ) : (
+          <kbd className="discover-search-hint" aria-hidden="true">/</kbd>
+        )}
       </label>
+      {popularTags.length ? (
+        <div className="discover-hero-tags">
+          <span>Popular</span>
+          {popularTags.map((name) => (
+            <button type="button" key={name} className={filters.q === name ? "active" : ""} onClick={() => updateFilter("q", filters.q === name ? "" : name)}>
+              #{name}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </header>
+  );
 
-      {!filterChips.length ? <DiscoverMemories ctx={ctx} /> : null}
+  return (
+    <Page title="Discover" header={hero} className="page-discover">
       {!filterChips.length ? <DiscoverTrending /> : null}
+      {!filterChips.length ? <DiscoverMemories ctx={ctx} /> : null}
 
-      <CategoryPills
-        categories={ctx.lookups.categories}
-        selectedId={filters.category_id}
-        onSelect={(categoryId) => updateFilter("category_id", categoryId)}
-      />
-
-      <section className="workspace">
-        <aside className="filter-rail">
-          <label className="field">
-            <span>Type</span>
-            <select value={filters.media_kind} onChange={(e) => updateFilter("media_kind", e.target.value)}>
-              <option value="">All media</option>
-              <option value="image">Images and GIFs</option>
-              <option value="video">Videos</option>
-            </select>
-          </label>
-          <label className="field">
-            <span>Category</span>
-            <select value={filters.category_id} onChange={(e) => updateFilter("category_id", e.target.value)}>
-              <option value="">All categories</option>
-              {ctx.lookups.categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-            </select>
-          </label>
-          <label className="field">
-            <span>Subcategory</span>
-            <select value={filters.subcategory_id} onChange={(e) => updateFilter("subcategory_id", e.target.value)} disabled={!subcategories.length}>
-              <option value="">All subcategories</option>
-              {subcategories.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-            </select>
-          </label>
-          <label className="field">
-            <span>Sort</span>
-            <select value={filters.sort} onChange={(e) => updateFilter("sort", e.target.value)}>
-              <option value="new">Newest</option>
-              <option value="trending">Trending</option>
-              <option value="popular">Most liked</option>
-              <option value="downloads">Most downloaded</option>
-              <option value="views">Most viewed</option>
-              <option value="old">Oldest</option>
-            </select>
-          </label>
-          <details className="filter-details" open>
-            <summary><SlidersHorizontal size={16} /> Advanced</summary>
-            <label className="field"><span>Uploader</span><input value={filters.uploader} onChange={(e) => updateFilter("uploader", e.target.value)} /></label>
-            <div className="two-col">
-              <label className="field"><span>Min MB</span><input value={filters.min_size} onChange={(e) => updateFilter("min_size", e.target.value)} type="number" min="0" /></label>
-              <label className="field"><span>Max MB</span><input value={filters.max_size} onChange={(e) => updateFilter("max_size", e.target.value)} type="number" min="0" /></label>
-            </div>
-            <div className="two-col">
-              <label className="field"><span>From</span><input value={filters.date_from} onChange={(e) => updateFilter("date_from", e.target.value)} type="date" /></label>
-              <label className="field"><span>To</span><input value={filters.date_to} onChange={(e) => updateFilter("date_to", e.target.value)} type="date" /></label>
-            </div>
-            <label className="field">
-              <span>18+ posts</span>
-              <select value={filters.adult} onChange={(e) => updateFilter("adult", e.target.value)}>
-                <option value="show">Show when allowed</option>
-                <option value="hide">Hide 18+</option>
-                <option value="only">Only 18+</option>
+      <section className="discover-browse" aria-label="Browse the gallery">
+        <div className="discover-browse-bar">
+          <CategoryPills
+            categories={ctx.lookups.categories}
+            selectedId={filters.category_id}
+            onSelect={(categoryId) => updateFilter("category_id", categoryId)}
+          />
+          <div className="discover-browse-controls">
+            <Segmented
+              value={filters.media_kind}
+              onChange={(value) => updateFilter("media_kind", value)}
+              options={[["", "All"], ["image", "Images"], ["video", "Videos"]]}
+            />
+            <label className="discover-sort">
+              <span className="sr-only">Sort</span>
+              <select value={filters.sort} onChange={(e) => updateFilter("sort", e.target.value)}>
+                {SORT_OPTIONS.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
               </select>
             </label>
-          </details>
-          <TagCloud tags={ctx.lookups.tags} onPick={(tag) => updateFilter("q", tag.name || tag.tag || tag)} />
-        </aside>
+            <button
+              type="button"
+              className={`discover-filters-toggle ${filtersOpen ? "active" : ""}`}
+              onClick={() => setFiltersOpen((open) => !open)}
+              aria-expanded={filtersOpen}
+              aria-controls="discover-filter-panel"
+            >
+              <SlidersHorizontal size={16} />
+              <span>Filters</span>
+              {advancedCount ? <span className="discover-filters-count">{advancedCount}</span> : null}
+            </button>
+            <div className="view-toggle">
+              <button
+                type="button"
+                className={`icon-button ${viewMode === "grid" ? "active" : ""}`}
+                onClick={() => changeViewMode("grid")}
+                title="Grid view"
+                aria-label="Grid view"
+              >
+                <Grid2X2 size={16} />
+              </button>
+              <button
+                type="button"
+                className={`icon-button ${viewMode === "masonry" ? "active" : ""}`}
+                onClick={() => changeViewMode("masonry")}
+                title="Masonry view"
+                aria-label="Masonry view"
+              >
+                <Columns2 size={16} />
+              </button>
+            </div>
+          </div>
+        </div>
 
-        <section className="content-panel">
-          {/* Toolbar: active filter chips + view mode toggle */}
-          <div className="discover-toolbar">
+        {subcategories.length ? (
+          <div className="category-pills subcategory-pills" aria-label={`${selectedCategory?.name || "Category"} subcategories`}>
+            <button type="button" className={`category-pill ${!filters.subcategory_id ? "active" : ""}`} onClick={() => updateFilter("subcategory_id", "")}>
+              All {selectedCategory?.name}
+            </button>
+            {subcategories.map((sub) => (
+              <button
+                type="button"
+                key={sub.id}
+                className={`category-pill ${String(filters.subcategory_id) === String(sub.id) ? "active" : ""}`}
+                onClick={() => updateFilter("subcategory_id", sub.id)}
+              >
+                {sub.name}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        {filtersOpen ? (
+          <section className="discover-filter-panel" id="discover-filter-panel" aria-label="More filters">
+            <div className="discover-filter-grid">
+              <label className="field"><span>Uploader</span><input value={filters.uploader} onChange={(e) => updateFilter("uploader", e.target.value)} placeholder="username" /></label>
+              <label className="field"><span>Min MB</span><input value={filters.min_size} onChange={(e) => updateFilter("min_size", e.target.value)} type="number" min="0" /></label>
+              <label className="field"><span>Max MB</span><input value={filters.max_size} onChange={(e) => updateFilter("max_size", e.target.value)} type="number" min="0" /></label>
+              <label className="field"><span>From</span><input value={filters.date_from} onChange={(e) => updateFilter("date_from", e.target.value)} type="date" /></label>
+              <label className="field"><span>To</span><input value={filters.date_to} onChange={(e) => updateFilter("date_to", e.target.value)} type="date" /></label>
+              <label className="field">
+                <span>18+ posts</span>
+                <select value={filters.adult} onChange={(e) => updateFilter("adult", e.target.value)}>
+                  <option value="show">Show when allowed</option>
+                  <option value="hide">Hide 18+</option>
+                  <option value="only">Only 18+</option>
+                </select>
+              </label>
+            </div>
+            <TagCloud tags={ctx.lookups.tags} onPick={(tag) => updateFilter("q", tag.name || tag.tag || tag)} />
+          </section>
+        ) : null}
+
+        <section className="content-panel discover-results">
+          <div className="discover-results-head">
+            <h2>{resultsHeading}</h2>
             {filterChips.length > 0 ? (
               <div className="active-filters">
                 {filterChips.map((chip) => (
@@ -451,26 +564,6 @@ export function DiscoverPage({ ctx }) {
                 ) : null}
               </div>
             ) : null}
-            <div className="view-toggle">
-              <button
-                type="button"
-                className={`icon-button ${viewMode === "grid" ? "active" : ""}`}
-                onClick={() => changeViewMode("grid")}
-                title="Grid view"
-                aria-label="Grid view"
-              >
-                <Grid2X2 size={16} />
-              </button>
-              <button
-                type="button"
-                className={`icon-button ${viewMode === "masonry" ? "active" : ""}`}
-                onClick={() => changeViewMode("masonry")}
-                title="Masonry view"
-                aria-label="Masonry view"
-              >
-                <Columns2 size={16} />
-              </button>
-            </div>
           </div>
 
           {error ? (

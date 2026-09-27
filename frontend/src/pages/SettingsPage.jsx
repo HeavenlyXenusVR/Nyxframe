@@ -256,21 +256,10 @@ export function SettingsPage({ ctx }) {
     setEmail(ctx.user.email || "");
   }, [ctx.settings, ctx.user]);
 
-  if (!ctx.user) return <RequireLogin />;
-
-  function updateProfile(key, value) {
-    setProfile((current) => ({ ...current, [key]: value }));
-  }
-
-  function updatePrefs(key, value) {
-    setPrefs((current) => ({ ...current, [key]: value }));
-  }
-
-  function applyPrefsPatch(patch) {
-    setPrefs((current) => ({ ...current, ...patch }));
-  }
-
   // Server-owned presets (gallery_looks.lua) -- see /api/appearance/presets.
+  // Declared above the signed-out early return below: hooks after it would
+  // stop running on logout and break React's hook order ("Rendered fewer
+  // hooks than expected").
   const [galleryPresets, setGalleryPresets] = useState([]);
   const [profilePresets, setProfilePresets] = useState([]);
   useEffect(() => {
@@ -284,6 +273,20 @@ export function SettingsPage({ ctx }) {
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  if (!ctx.user) return <RequireLogin />;
+
+  function updateProfile(key, value) {
+    setProfile((current) => ({ ...current, [key]: value }));
+  }
+
+  function updatePrefs(key, value) {
+    setPrefs((current) => ({ ...current, [key]: value }));
+  }
+
+  function applyPrefsPatch(patch) {
+    setPrefs((current) => ({ ...current, ...patch }));
+  }
 
   async function saveProfile(event) {
     event.preventDefault();
@@ -588,7 +591,7 @@ export function SettingsPage({ ctx }) {
             <label className="field"><span>Backdrop image URL</span><input value={prefs.profile_backdrop_image_url || ""} onChange={(event) => updatePrefs("profile_backdrop_image_url", event.target.value)} placeholder="https://..." /></label>
             <div className="two-col">
               <label className="field"><span>Panel opacity <small>(lower lets the site background show through your profile panel)</small></span><input type="range" min="0.2" max="1" step="0.05" value={prefs.profile_surface_opacity ?? 1} onChange={(event) => updatePrefs("profile_surface_opacity", Number(event.target.value))} /></label>
-              <label className="field"><span>Panel blur <small>(glass/frosted effect)</small></span><input type="range" min="0" max="24" step="1" value={prefs.profile_surface_blur ?? 0} onChange={(event) => updatePrefs("profile_surface_blur", Number(event.target.value))} /></label>
+              <label className="field"><span>Extra panel blur <small>(frost on top of the standard glass)</small></span><input type="range" min="0" max="24" step="1" value={prefs.profile_surface_blur ?? 0} onChange={(event) => updatePrefs("profile_surface_blur", Number(event.target.value))} /></label>
             </div>
           </div>
             <div className="settings-cluster">

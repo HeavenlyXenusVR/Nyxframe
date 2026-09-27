@@ -66,7 +66,9 @@ export function glassPointerMove(event) {
 // history.
 const SITE_NAME = "Nyxframe";
 
-export function Page({ title, eyebrow, lede = "", actions, className = "", children }) {
+// `header` replaces the standard page-head block entirely (the Discover front
+// page renders its own hero); `title` still drives document.title either way.
+export function Page({ title, eyebrow, lede = "", actions, header, className = "", children }) {
   useEffect(() => {
     if (!title) return undefined;
     const previous = document.title;
@@ -80,14 +82,16 @@ export function Page({ title, eyebrow, lede = "", actions, className = "", child
 
   return (
     <div className={`page ${className}`.trim()}>
-      <header className="page-head">
-        <div>
-          <p>{eyebrow}</p>
-          <h1>{title}</h1>
-          {lede ? <span className="page-lede">{lede}</span> : null}
-        </div>
-        {actions ? <div className="page-actions">{actions}</div> : null}
-      </header>
+      {header || (
+        <header className="page-head">
+          <div>
+            <p>{eyebrow}</p>
+            <h1>{title}</h1>
+            {lede ? <span className="page-lede">{lede}</span> : null}
+          </div>
+          {actions ? <div className="page-actions">{actions}</div> : null}
+        </header>
+      )}
       {children}
     </div>
   );

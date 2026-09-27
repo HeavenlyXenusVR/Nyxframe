@@ -165,7 +165,14 @@ async function installMocks(context, options = {}) {
     if (path === "/api/tags" && method === "GET") return route.fulfill(json({ tags: [{ name: "cloud" }, { name: "aria" }, { name: "mock" }] }));
     if (path === "/api/live/checks" && method === "GET") return route.fulfill(json({ ok: true, checks: { api: true, database: true } }));
 
-    if (path === "/api/media" && method === "GET") return route.fulfill(json({ media: mediaRows }));
+    if (path === "/api/media" && method === "GET") {
+      // Honour offset/limit like the real endpoint so infinite scroll gets a
+      // genuine second page instead of the same rows again.
+      const offset = Number(url.searchParams.get("offset") || 0);
+      const limit = Number(url.searchParams.get("limit") || mediaRows.length);
+      return route.fulfill(json({ media: mediaRows.slice(offset, offset + limit) }));
+    }
+    if (path === "/api/media/trending" && method === "GET") return route.fulfill(json({ media: mediaRows.slice(0, 11) }));
     if (path === "/api/media" && method === "POST") return route.fulfill(json({ media: mediaItem(88, { title: "Uploaded Mock Media" }) }));
     if (path === "/api/media/random" && method === "GET") return route.fulfill(json({ media: ownerMedia }));
     if (path === "/api/media/analyze" && method === "POST") {
@@ -236,6 +243,26 @@ async function installMocks(context, options = {}) {
     if (path === "/api/me/age-verification" && method === "POST") return route.fulfill(json({ user: currentUser }));
     if (path === "/api/me/password" && method === "POST") return route.fulfill(json({ ok: true }));
 
+    // Ambient/background endpoints every page shell polls.
+    if (path === "/api/site/background" && method === "GET") return route.fulfill(json({ background: null, refresh_after_seconds: 300 }));
+    if (path === "/api/site/announcement" && method === "GET") return route.fulfill(json({ announcement: "", announcement_level: "info" }));
+    if (path === "/api/background-music" && method === "GET") return route.fulfill(json({ tracks: [] }));
+    if (path === "/api/notifications/unread-count" && method === "GET") return route.fulfill(json({ unread_count: 0 }));
+    if (path === "/api/me/memories" && method === "GET") return route.fulfill(json({ media: [] }));
+    if (path === "/api/auth/logout" && method === "POST") return route.fulfill(json({ ok: true }));
+
+    // Settings / Studio / Collections / Upload side panels.
+    if (path === "/api/saved-searches" && method === "GET") return route.fulfill(json({ saved_searches: [] }));
+    if (path === "/api/me/blocks" && method === "GET") return route.fulfill(json({ blocks: [] }));
+    if (path === "/api/me/api-keys" && method === "GET") return route.fulfill(json({ api_keys: [] }));
+    if (path === "/api/me/2fa/status" && method === "GET") return route.fulfill(json({ enabled: false }));
+    if (path === "/api/me/discord/verify/status" && method === "GET") return route.fulfill(json({ verified: false }));
+    if (path === "/api/appearance/presets" && method === "GET") return route.fulfill(json({ gallery: [], profile: [] }));
+    if (path === "/api/ai/vision/status" && method === "GET") return route.fulfill(json({ vision: null }));
+    if (path === "/api/me/stats" && method === "GET") return route.fulfill(json({ daily_new_viewers: [] }));
+    if (path === "/api/collections/suggestions" && method === "GET") return route.fulfill(json({ suggestions: [] }));
+    if (path === "/api/media/upload/diagnostics" && method === "POST") return route.fulfill(json({ ok: true }));
+
     unhandled.push(`${method} ${path}${url.search}`);
     return route.fulfill(json({ detail: `Unhandled mock route: ${method} ${path}` }, 599));
   });
@@ -246,7 +273,13 @@ async function installMocks(context, options = {}) {
 function watchPage(page, failures) {
   page.on("pageerror", (error) => failures.push(`pageerror: ${error.message}`));
   page.on("console", (message) => {
-    if (message.type() === "error") failures.push(`console error: ${message.text()}`);
+    if (message.type() !== "error") return;
+    const text = message.text();
+    // Expected noise, not app failures: the signed-out flow's /api/me 401s,
+    // and the service worker, which only the Lua backend serves at the site
+    // root (the Vite dev server 404s it).
+    if (/status of 401\b/.test(text) || /fetching the script/.test(text)) return;
+    failures.push(`console error: ${text}`);
   });
   page.on("requestfailed", (request) => failures.push(`request failed: ${request.method()} ${request.url()} ${request.failure()?.errorText}`));
   page.on("response", (response) => {
@@ -330,15 +363,35 @@ async function runAuthenticatedMock(browser, failures) {
 
   await page.goto(`${BASE_URL}/`, { waitUntil: "networkidle" });
   await page.locator(".media-card").first().waitFor({ state: "visible", timeout: 10_000 });
+  // Listen before interacting: the (debounced) filtered request can fire
+  // while the later controls are still being clicked.
+  const filteredFeed = page.waitForRequest((request) => {
+    const url = new URL(request.url());
+    return url.pathname.endsWith("/api/media") && url.searchParams.get("media_kind") === "image"
+      && url.searchParams.get("category_id") === "2" && url.searchParams.get("subcategory_id") === "9"
+      && url.searchParams.get("sort") === "views";
+  }, { timeout: 20_000 });
   await click(page, "Refresh");
-  await page.getByPlaceholder("wallpaper, meme, vaporwave").fill("cloud");
-  await page.locator(".filter-rail select").nth(0).selectOption("image");
-  await page.locator(".filter-rail select").nth(1).selectOption("2");
-  await page.locator(".filter-rail select").nth(2).selectOption("9");
-  await page.locator(".filter-rail select").nth(3).selectOption("views");
-  await page.locator(".tag-cloud button").first().click();
-  await page.getByRole("button", { name: "Next" }).click();
-  await page.getByRole("button", { name: "Previous" }).click();
+  await page.getByPlaceholder("Search wallpapers, memes, tags…").fill("cloud");
+  await page.locator(".discover-browse-controls .segmented").getByRole("button", { name: "Images" }).click();
+  await page.locator(".discover-browse-bar .category-pill", { hasText: "Profile Pictures" }).click();
+  await page.locator(".subcategory-pills .category-pill", { hasText: "Final Fantasy" }).click();
+  await page.locator(".discover-sort select").selectOption("views");
+  await page.locator(".discover-filters-toggle").click();
+  await page.locator(".discover-filter-panel .tag-cloud button").first().click();
+  await filteredFeed.catch(() => failures.push("discover browse bar did not request the filtered feed"));
+  await page.locator(".media-card").first().waitFor({ state: "visible", timeout: 10_000 });
+  // Paging is infinite scroll + a "Load more" fallback now (no Next/Previous).
+  const nextPage = page.waitForRequest((request) => request.url().includes("/api/media?") && new URL(request.url()).searchParams.get("offset") === "24", { timeout: 10_000 });
+  // Scrolling to the sentinel is the normal path; the "Load more" button is
+  // the fallback when the observer doesn't fire (it vanishes once it does).
+  await page.locator(".scroll-sentinel").scrollIntoViewIfNeeded();
+  const loaded = await Promise.race([nextPage.then(() => true), page.waitForTimeout(3000).then(() => false)]).catch(() => false);
+  if (!loaded) {
+    await page.getByRole("button", { name: "Load more" }).click({ timeout: 5000 }).catch(() => {});
+    await nextPage.catch(() => failures.push("discover did not load a second page"));
+  }
+  await page.evaluate(() => window.scrollTo(0, 0));
   await page.locator(".card-actions button").nth(0).click();
   await page.locator(".card-actions button").nth(1).click();
   await page.locator(".card-actions button").nth(2).click();
@@ -351,15 +404,16 @@ async function runAuthenticatedMock(browser, failures) {
   await page.getByRole("button", { name: /Like|Unlike/ }).first().click();
   await page.getByRole("button", { name: /Save|Saved/ }).first().click();
   await page.getByRole("button", { name: "Download" }).click();
-  await page.locator(".detail-side select").first().selectOption("5");
-  await page.getByRole("button", { name: "Add" }).click();
+  await page.locator(".detail-side").getByRole("button", { name: "Add to Collection" }).click();
+  await page.getByLabel("Choose collection").selectOption("5");
+  await page.locator(".collection-inline-panel").getByRole("button", { name: "Add" }).click();
   await page.locator(".detail-side").getByRole("button", { name: "Save" }).first().click();
   await page.locator(".detail-side").getByRole("button", { name: "Delete" }).first().click();
   await page.getByPlaceholder("Reason").fill("mock report");
   await page.getByPlaceholder("Details").fill("mock details");
   await page.locator("form.side-box").getByRole("button", { name: "Send" }).click();
   await page.getByPlaceholder("Add a comment").fill("Fresh mock comment");
-  await page.getByRole("button", { name: "Post" }).click();
+  await page.locator(".comment-form").getByRole("button", { name: "Post", exact: true }).click();
   await expectVisible(page, "Fresh mock comment");
   await page.locator(".comment .icon-button").first().click();
 
@@ -417,7 +471,14 @@ async function runAuthenticatedMock(browser, failures) {
     page.waitForResponse((response) => response.url().includes("/api/media/analyze") && response.request().method() === "POST"),
     analyzeButton.click(),
   ]);
-  const analyzedTitle = await page.getByLabel("Title").inputValue();
+  // The response lands before React commits the analyzed fields into the
+  // form, so poll briefly rather than reading the input the same tick.
+  const titleInput = page.getByLabel("Title");
+  let analyzedTitle = "";
+  for (let attempt = 0; attempt < 25 && analyzedTitle !== "Analyzed Mock"; attempt += 1) {
+    analyzedTitle = await titleInput.inputValue();
+    if (analyzedTitle !== "Analyzed Mock") await page.waitForTimeout(200);
+  }
   if (analyzedTitle !== "Analyzed Mock") failures.push(`analyze did not fill title, saw: ${analyzedTitle}`);
   await click(page, "Upload");
   await page.waitForURL(/\/media\/88/, { timeout: 10_000 });
@@ -430,7 +491,7 @@ async function runAuthenticatedMock(browser, failures) {
   await page.locator("input[type='file']").setInputFiles({ name: "avatar.png", mimeType: "image/png", buffer: Buffer.from(PNG_BASE64, "base64") });
   await page.getByLabel("Email").fill("heavenly-updated@example.test");
   await page.getByRole("button", { name: "Save Email" }).click();
-  await page.getByLabel("Code").fill("123456");
+  await page.getByLabel("Code", { exact: true }).fill("123456");
   await page.getByRole("button", { name: "Verify", exact: true }).click();
   await page.getByLabel("Birthdate").fill("2000-01-01");
   await page.getByLabel("I am 18+").check();
@@ -461,6 +522,23 @@ async function runAuthenticatedMock(browser, failures) {
   await context.close();
 }
 
+// Phones get a bottom tab bar with only the primary destinations; the rest
+// live in the "More" sheet (see Shell.jsx).
+// Waits for the URL to actually change: the outgoing page's own cards and
+// nav labels would otherwise satisfy the caller's next "is it visible" check
+// mid-transition, and the next tap would land while the route is changing.
+async function openMobileNav(page, label) {
+  const direct = page.locator(".primary-nav").getByRole("link", { name: label, exact: true });
+  let target = direct;
+  if (!(await direct.isVisible().catch(() => false))) {
+    await page.locator(".nav-item-more").click();
+    target = page.locator(".nav-more-sheet").getByRole("menuitem", { name: label, exact: true });
+  }
+  const href = await target.getAttribute("href");
+  await target.click();
+  if (href) await page.waitForURL((url) => url.pathname === href, { timeout: 10_000 });
+}
+
 async function runMobileMock(browser, failures) {
   const context = await browser.newContext({
     viewport: { width: 390, height: 844 },
@@ -480,21 +558,21 @@ async function runMobileMock(browser, failures) {
   await page.locator(".media-card").first().waitFor({ state: "visible", timeout: 10_000 });
   await click(page, "Refresh");
 
-  await page.getByRole("link", { name: "Collections" }).click();
+  await openMobileNav(page, "Collections");
   await expectVisible(page, "Collections");
-  await page.getByRole("link", { name: "Users" }).click();
+  await openMobileNav(page, "Users");
   await expectVisible(page, "Users");
-  await page.getByRole("link", { name: "Following" }).click();
+  await openMobileNav(page, "Following");
   await expectVisible(page, "Following");
   await page.locator(".media-card").first().waitFor({ state: "visible", timeout: 10_000 });
-  await page.getByRole("link", { name: "Liked" }).click();
+  await openMobileNav(page, "Liked");
   await expectVisible(page, "Liked");
   await page.locator(".media-card").first().waitFor({ state: "visible", timeout: 10_000 });
-  await page.getByRole("link", { name: "Friends" }).click();
+  await openMobileNav(page, "Friends");
   await expectVisible(page, "Friends");
-  await page.getByRole("link", { name: "Studio" }).click();
+  await openMobileNav(page, "Studio");
   await expectVisible(page, "Studio");
-  await page.getByRole("link", { name: "Upload" }).click();
+  await openMobileNav(page, "Upload");
   await expectVisible(page, "Upload");
   await page.getByTitle("Settings").click();
   await expectVisible(page, "Settings");
@@ -508,7 +586,9 @@ async function runMobileMock(browser, failures) {
 }
 
 async function main() {
-  const browser = await chromium.launch({ headless: true });
+  // CHROMIUM_PATH: point at a preinstalled Chromium when the bundled
+  // Playwright browser build isn't downloaded (sandboxes, CI images).
+  const browser = await chromium.launch({ headless: true, executablePath: process.env.CHROMIUM_PATH || undefined });
   const failures = [];
   try {
     await runAuthAndPublicMock(browser, failures);

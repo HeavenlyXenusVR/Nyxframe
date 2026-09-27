@@ -246,6 +246,14 @@ export function videoQualityUrl(item, quality = "original") {
   }
 }
 
+// Offset paging over a live feed can repeat a post at the page seam (a new
+// upload shifts everything down by one between requests), so appended pages
+// skip ids that are already on screen instead of rendering duplicate keys.
+export function appendUniqueMedia(rows, nextRows) {
+  const seen = new Set(rows.map((item) => Number(item.id)));
+  return [...rows, ...nextRows.filter((item) => !seen.has(Number(item.id)))];
+}
+
 export function replaceMedia(rows, updated) {
   if (!updated) return rows;
   return rows.map((item) => Number(item.id) === Number(updated.id) ? updated : item);

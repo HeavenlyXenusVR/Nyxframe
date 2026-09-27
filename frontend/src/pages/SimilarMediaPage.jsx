@@ -4,7 +4,7 @@ import { ArrowLeft } from "lucide-react";
 import { apiFetch, toQuery } from "../api.js";
 import { MediaGrid } from "../components/media.jsx";
 import { Page } from "../components/ui.jsx";
-import { replaceMedia } from "../utils/media.js";
+import { appendUniqueMedia, replaceMedia } from "../utils/media.js";
 
 const PAGE_SIZE = 24;
 
@@ -31,7 +31,7 @@ export function SimilarMediaPage({ ctx }) {
       const data = await apiFetch(`/api/media/${mediaId}/similar${toQuery({ limit: PAGE_SIZE + 1, offset: (page - 1) * PAGE_SIZE })}`);
       const rows = data.media || [];
       const pageItems = rows.slice(0, PAGE_SIZE);
-      setItems((prev) => (append ? [...prev, ...pageItems] : pageItems));
+      setItems((prev) => (append ? appendUniqueMedia(prev, pageItems) : pageItems));
       setHasNext(rows.length > PAGE_SIZE);
     } catch (err) {
       if (!append) { setError(err.message); setItems([]); setHasNext(false); }
