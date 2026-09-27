@@ -256,21 +256,10 @@ export function SettingsPage({ ctx }) {
     setEmail(ctx.user.email || "");
   }, [ctx.settings, ctx.user]);
 
-  if (!ctx.user) return <RequireLogin />;
-
-  function updateProfile(key, value) {
-    setProfile((current) => ({ ...current, [key]: value }));
-  }
-
-  function updatePrefs(key, value) {
-    setPrefs((current) => ({ ...current, [key]: value }));
-  }
-
-  function applyPrefsPatch(patch) {
-    setPrefs((current) => ({ ...current, ...patch }));
-  }
-
   // Server-owned presets (gallery_looks.lua) -- see /api/appearance/presets.
+  // Declared above the signed-out early return below: hooks after it would
+  // stop running on logout and break React's hook order ("Rendered fewer
+  // hooks than expected").
   const [galleryPresets, setGalleryPresets] = useState([]);
   const [profilePresets, setProfilePresets] = useState([]);
   useEffect(() => {
@@ -284,6 +273,20 @@ export function SettingsPage({ ctx }) {
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  if (!ctx.user) return <RequireLogin />;
+
+  function updateProfile(key, value) {
+    setProfile((current) => ({ ...current, [key]: value }));
+  }
+
+  function updatePrefs(key, value) {
+    setPrefs((current) => ({ ...current, [key]: value }));
+  }
+
+  function applyPrefsPatch(patch) {
+    setPrefs((current) => ({ ...current, ...patch }));
+  }
 
   async function saveProfile(event) {
     event.preventDefault();

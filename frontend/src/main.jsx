@@ -37,9 +37,10 @@ function applyRuntimeClasses() {
 applyRuntimeClasses();
 startRemoteOriginPolling();
 
-// The service worker + manifest are served from site root by the FastAPI backend
-// (see app/routers/pages.py). The static GitHub Pages mirror doesn't have that
-// backend, so registering there would just 404 against an unrelated root — skip it.
+// The service worker + manifest are served from site root by the Lua backend
+// (see lua/src/static.lua; the Vite dev server doesn't, so this 404s harmlessly
+// there). The static GitHub Pages mirror doesn't have that backend, so
+// registering there would just 404 against an unrelated root — skip it.
 if ("serviceWorker" in navigator && !window.location.hostname.endsWith("github.io")) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("/service-worker.js").catch(() => {});

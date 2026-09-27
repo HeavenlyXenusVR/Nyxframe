@@ -6,7 +6,7 @@ import { PAGE_SIZE } from "../config.js";
 import { CategoryPills, DiscoverMemories, DiscoverTrending } from "../components/discover.jsx";
 import { MediaGrid } from "../components/media.jsx";
 import { EmptyState, Notice, Page, Segmented, TagCloud } from "../components/ui.jsx";
-import { preloadMediaAssets, replaceMedia } from "../utils/media.js";
+import { appendUniqueMedia, preloadMediaAssets, replaceMedia } from "../utils/media.js";
 
 function timeOfDayGreeting(user) {
   if (!user) return "Welcome to Nyxframe";
@@ -184,7 +184,7 @@ export function DiscoverPage({ ctx }) {
       const rows = data.media || [];
       const pageItems = rows.slice(0, pageSize);
       if (append) {
-        setItems((prev) => [...prev, ...pageItems]);
+        setItems((prev) => appendUniqueMedia(prev, pageItems));
       } else {
         setItems(pageItems);
       }

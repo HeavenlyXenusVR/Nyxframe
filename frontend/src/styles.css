@@ -7512,3 +7512,22 @@ select option {
 .active-filters .filter-chip-save + .filter-chip-save {
   margin-left: 0;
 }
+
+/* Report status colours were tuned for dark glass; darken them on white. */
+.gallery-theme-light .report-status-pill.status-open {
+  color: #9a6700;
+}
+
+.gallery-theme-light .report-status-pill.status-reviewed {
+  color: color-mix(in srgb, var(--accent) 60%, #0b2a24);
+}
+
+@media (prefers-color-scheme: light) {
+  .gallery-theme-system .report-status-pill.status-open {
+    color: #9a6700;
+  }
+
+  .gallery-theme-system .report-status-pill.status-reviewed {
+    color: color-mix(in srgb, var(--accent) 60%, #0b2a24);
+  }
+}
