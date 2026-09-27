@@ -212,6 +212,7 @@ export function MessagesPage({ ctx }) {
     <Page
       title="Messages"
       eyebrow="Social"
+      className="page-messages"
       actions={(
         <>
           <button type="button" onClick={() => setShowNewGroup((current) => !current)}>

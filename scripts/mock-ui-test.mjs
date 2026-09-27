@@ -186,6 +186,7 @@ async function installMocks(context, options = {}) {
       }));
     }
     if (mediaDetail && method === "DELETE") return route.fulfill(json({ ok: true }));
+    if (mediaDetail && method === "PATCH") return route.fulfill(json(withUpdatedMedia(mediaDetail[1], { title: "Edited Mock Title" })));
     if (/^\/api\/media\/\d+\/controls$/.test(path) && method === "PATCH") return route.fulfill(json(withUpdatedMedia(path.split("/")[3], { visibility: "unlisted" })));
     if (/^\/api\/media\/\d+\/restore$/.test(path) && method === "POST") return route.fulfill(json(withUpdatedMedia(path.split("/")[3], { deleted_at: null })));
     if (/^\/api\/media\/\d+\/like$/.test(path) && method === "POST") return route.fulfill(json(withUpdatedMedia(path.split("/")[3], { liked_by_me: true, like_count: 99 })));
@@ -407,8 +408,14 @@ async function runAuthenticatedMock(browser, failures) {
   await page.locator(".detail-side").getByRole("button", { name: "Add to Collection" }).click();
   await page.getByLabel("Choose collection").selectOption("5");
   await page.locator(".collection-inline-panel").getByRole("button", { name: "Add" }).click();
-  await page.locator(".detail-side").getByRole("button", { name: "Save" }).first().click();
-  await page.locator(".detail-side").getByRole("button", { name: "Delete" }).first().click();
+  // Owner tools and Report live in collapsible sections on the post page.
+  await page.locator(".side-disclosure > summary", { hasText: "Edit post" }).click();
+  await page.locator(".detail-side").getByRole("button", { name: "Save Post" }).click();
+  const controls = page.locator(".side-disclosure", { has: page.locator("summary", { hasText: "Visibility & controls" }) });
+  await controls.locator("summary").click();
+  await controls.getByRole("button", { name: "Save", exact: true }).click();
+  await controls.getByRole("button", { name: "Delete" }).click();
+  await page.locator(".side-disclosure > summary", { hasText: "Report this post" }).click();
   await page.getByPlaceholder("Reason").fill("mock report");
   await page.getByPlaceholder("Details").fill("mock details");
   await page.locator("form.side-box").getByRole("button", { name: "Send" }).click();
@@ -504,6 +511,7 @@ async function runAuthenticatedMock(browser, failures) {
   await expectVisible(page, "Login");
 
   const requiredPosts = [
+    "/api/media/14",
     "/api/media/analyze",
     "/api/media",
     "/api/me/profile",

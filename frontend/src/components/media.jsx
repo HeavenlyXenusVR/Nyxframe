@@ -388,7 +388,9 @@ function publishPayloadValue(inputValue) {
   return parsed.toISOString().slice(0, 19);
 }
 
-export function MediaControls({ ctx, media, onChanged }) {
+// onDeleted: optional -- a list view (Studio) passes it to drop the row;
+// without it, onChanged(null) tells a single-post view the post is gone.
+export function MediaControls({ ctx, media, onChanged, onDeleted }) {
   const [draft, setDraft] = useState({
     visibility: media.visibility || "public",
     comments_enabled: media.comments_enabled !== false,
@@ -427,7 +429,8 @@ export function MediaControls({ ctx, media, onChanged }) {
       await apiFetch(`/api/media/${media.id}`, { method: "DELETE" });
       clearApiCache();
       ctx.showToast("Post deleted.", "success");
-      onChanged(null);
+      if (onDeleted) onDeleted(media.id);
+      else onChanged(null);
     } catch (error) {
       ctx.showToast(error.message, "error");
     }
@@ -477,17 +480,6 @@ export function MediaActionPanel({ ctx, media, actions }) {
 }
 
 export function StudioItem({ ctx, item, onChanged, onRemoved, selected = false, onToggleSelect }) {
-  async function remove() {
-    if (!window.confirm("Delete this post? This cannot be undone from here.")) return;
-    try {
-      await apiFetch(`/api/media/${item.id}`, { method: "DELETE" });
-      clearApiCache();
-      onRemoved(item.id);
-    } catch (error) {
-      ctx.showToast(error.message, "error");
-    }
-  }
-
   return (
     <article className={`studio-item ${selected ? "is-selected" : ""}`}>
       {onToggleSelect ? (
@@ -500,7 +492,7 @@ export function StudioItem({ ctx, item, onChanged, onRemoved, selected = false, 
           ? <ResilientImage className={ctx.settings.blur_video_previews ? "blurred-video-thumb" : ""} sources={mediaImageSources(item, { width: 420, previewSize: "card" })} diagnostics={{ mediaId: item.id, mediaKind: item.media_kind, context: "studio-video-thumb" }} alt="" loading="lazy" decoding="async" fallback={<div className="video-thumb-placeholder"><Film size={34} /></div>} />
           : <ResilientImage sources={mediaImageSources(item, { width: 640, previewSize: "detail" })} diagnostics={{ mediaId: item.id, mediaKind: item.media_kind, context: "studio-image" }} alt="" loading="lazy" decoding="async" fallback={<div className="video-thumb-placeholder"><ImageIcon size={34} /></div>} />}
       </Link>
-      <div>
+      <div className="studio-info">
         <h3>{item.title || "Untitled"}</h3>
         <p>{item.visibility || "public"} / {formatBytes(item.file_size)} / {formatDate(item.created_at || item.uploaded_at)}</p>
         {item.publish_at && new Date(item.publish_at) > new Date() ? (
@@ -508,9 +500,11 @@ export function StudioItem({ ctx, item, onChanged, onRemoved, selected = false, 
         ) : null}
         <StatsRow item={item} compact />
       </div>
+      {/* One Delete, inside Controls. There used to be a second one here:
+          the two disagreed -- this one dropped the row, the Controls one
+          deleted server-side but left the post on screen. */}
       <div className="studio-actions">
-        <MediaControls ctx={ctx} media={item} onChanged={onChanged} />
-        {!item.deleted_at ? <button className="danger" type="button" onClick={remove}><Trash2 size={16} />Delete</button> : null}
+        <MediaControls ctx={ctx} media={item} onChanged={onChanged} onDeleted={onRemoved} />
       </div>
     </article>
   );
