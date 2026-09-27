@@ -228,6 +228,9 @@ export function MediaDetailPage({ ctx }) {
       </>
     )}>
       <section className="detail-layout">
+        {/* Stage and comments share the left column so it isn't a short
+            image beside a long side column with empty space under it. */}
+        <div className="detail-main">
         <article className="media-stage">
           {siblingIndex >= 0 && siblingIds.length > 1 ? (
             <div className="detail-stage-nav">
@@ -271,6 +274,58 @@ export function MediaDetailPage({ ctx }) {
             </>
           )}
         </article>
+        <section className="comments-panel">
+          <div className="section-head"><h2>Comments</h2><span>{comments.length}</span></div>
+          {ctx.user && media.comments_enabled !== false ? (
+            <form className="comment-form" onSubmit={addComment}>
+              {replyTo ? (
+                <div className="reply-banner">
+                  <span>Replying to {replyTo.display_name || replyTo.username}</span>
+                  <button type="button" className="icon-button" onClick={() => setReplyTo(null)}>Cancel</button>
+                </div>
+              ) : null}
+              <input value={commentBody} onChange={(event) => setCommentBody(event.target.value)} placeholder="Add a comment (@mention a username)" />
+              <button type="submit"><MessageCircle size={16} />Post</button>
+            </form>
+          ) : null}
+          <div className="comments-list">
+            {comments.length ? comments.filter((comment) => !comment.parent_comment_id).map((comment) => {
+              const replies = comments.filter((row) => Number(row.parent_comment_id) === Number(comment.id));
+              const canDelete = ctx.user && (Number(ctx.user.id) === Number(comment.user_id) || Number(ctx.user.id) === Number(media.user_id));
+              return (
+                <div key={comment.id}>
+                  <article className="comment">
+                    <Avatar user={comment} compact />
+                    <div>
+                      <strong>{comment.display_name || comment.username || "User"}</strong>
+                      <p>{comment.body}</p>
+                      {ctx.user ? <button type="button" className="icon-button" onClick={() => setReplyTo(comment)} title="Reply"><Reply size={14} /></button> : null}
+                    </div>
+                    {canDelete ? <button className="icon-button" type="button" onClick={() => deleteComment(comment.id)} title="Delete"><Trash2 size={16} /></button> : null}
+                  </article>
+                  {replies.length ? (
+                    <div className="comment-replies">
+                      {replies.map((reply) => {
+                        const canDeleteReply = ctx.user && (Number(ctx.user.id) === Number(reply.user_id) || Number(ctx.user.id) === Number(media.user_id));
+                        return (
+                          <article className="comment comment-reply" key={reply.id}>
+                            <Avatar user={reply} compact />
+                            <div>
+                              <strong>{reply.display_name || reply.username || "User"}</strong>
+                              <p>{reply.body}</p>
+                            </div>
+                            {canDeleteReply ? <button className="icon-button" type="button" onClick={() => deleteComment(reply.id)} title="Delete"><Trash2 size={16} /></button> : null}
+                          </article>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            }) : <EmptyState title="No comments yet" />}
+          </div>
+        </section>
+        </div>
         <aside className="detail-side">
           <UserLine user={media} />
           {media.description ? <p className="description">{media.description}</p> : null}
@@ -311,68 +366,31 @@ export function MediaDetailPage({ ctx }) {
             </div>
           ) : null}
           <MediaActionPanel ctx={ctx} media={media} actions={actions} />
-          {isOwner ? <MediaEditor ctx={ctx} media={media} onChanged={setMedia} /> : null}
-          {isOwner ? <MediaControls ctx={ctx} media={media} onChanged={setMedia} /> : null}
+          {/* Owner tools and Report are occasional tasks: collapsed by
+              default so they don't stretch the side column. */}
+          {isOwner ? (
+            <details className="side-disclosure">
+              <summary>Edit post</summary>
+              <MediaEditor ctx={ctx} media={media} onChanged={setMedia} />
+            </details>
+          ) : null}
+          {isOwner ? (
+            <details className="side-disclosure">
+              <summary>Visibility &amp; controls</summary>
+              <MediaControls ctx={ctx} media={media} onChanged={setMedia} />
+            </details>
+          ) : null}
           {ctx.user ? (
-            <form className="side-box" onSubmit={reportMedia}>
-              <h3>Report</h3>
-              <input value={report.reason} onChange={(event) => setReport((current) => ({ ...current, reason: event.target.value }))} placeholder="Reason" />
-              <textarea value={report.details} onChange={(event) => setReport((current) => ({ ...current, details: event.target.value }))} placeholder="Details" rows={3} />
-              <button type="submit">Send</button>
-            </form>
+            <details className="side-disclosure">
+              <summary>Report this post</summary>
+              <form className="side-box" onSubmit={reportMedia}>
+                <input value={report.reason} onChange={(event) => setReport((current) => ({ ...current, reason: event.target.value }))} placeholder="Reason" />
+                <textarea value={report.details} onChange={(event) => setReport((current) => ({ ...current, details: event.target.value }))} placeholder="Details" rows={3} />
+                <button type="submit">Send</button>
+              </form>
+            </details>
           ) : null}
         </aside>
-      </section>
-      <section className="comments-panel">
-        <div className="section-head"><h2>Comments</h2><span>{comments.length}</span></div>
-        {ctx.user && media.comments_enabled !== false ? (
-          <form className="comment-form" onSubmit={addComment}>
-            {replyTo ? (
-              <div className="reply-banner">
-                <span>Replying to {replyTo.display_name || replyTo.username}</span>
-                <button type="button" className="icon-button" onClick={() => setReplyTo(null)}>Cancel</button>
-              </div>
-            ) : null}
-            <input value={commentBody} onChange={(event) => setCommentBody(event.target.value)} placeholder="Add a comment (@mention a username)" />
-            <button type="submit"><MessageCircle size={16} />Post</button>
-          </form>
-        ) : null}
-        <div className="comments-list">
-          {comments.length ? comments.filter((comment) => !comment.parent_comment_id).map((comment) => {
-            const replies = comments.filter((row) => Number(row.parent_comment_id) === Number(comment.id));
-            const canDelete = ctx.user && (Number(ctx.user.id) === Number(comment.user_id) || Number(ctx.user.id) === Number(media.user_id));
-            return (
-              <div key={comment.id}>
-                <article className="comment">
-                  <Avatar user={comment} compact />
-                  <div>
-                    <strong>{comment.display_name || comment.username || "User"}</strong>
-                    <p>{comment.body}</p>
-                    {ctx.user ? <button type="button" className="icon-button" onClick={() => setReplyTo(comment)} title="Reply"><Reply size={14} /></button> : null}
-                  </div>
-                  {canDelete ? <button className="icon-button" type="button" onClick={() => deleteComment(comment.id)} title="Delete"><Trash2 size={16} /></button> : null}
-                </article>
-                {replies.length ? (
-                  <div className="comment-replies">
-                    {replies.map((reply) => {
-                      const canDeleteReply = ctx.user && (Number(ctx.user.id) === Number(reply.user_id) || Number(ctx.user.id) === Number(media.user_id));
-                      return (
-                        <article className="comment comment-reply" key={reply.id}>
-                          <Avatar user={reply} compact />
-                          <div>
-                            <strong>{reply.display_name || reply.username || "User"}</strong>
-                            <p>{reply.body}</p>
-                          </div>
-                          {canDeleteReply ? <button className="icon-button" type="button" onClick={() => deleteComment(reply.id)} title="Delete"><Trash2 size={16} /></button> : null}
-                        </article>
-                      );
-                    })}
-                  </div>
-                ) : null}
-              </div>
-            );
-          }) : <EmptyState title="No comments yet" />}
-        </div>
       </section>
       {similar.length ? (
         <section className="similar-media-panel">

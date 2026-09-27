@@ -7975,3 +7975,248 @@ select option {
     padding: 16px;
   }
 }
+
+/* ═════════════════════════════════════════════════════════════════════════
+   Tighter layouts -- no big empty areas
+   ─────────────────────────────────────────────────────────────────────────
+   Page headers are compact; panels hug their content instead of
+   stretching to the row; side columns that are shorter than their
+   neighbour stay on screen (sticky); Studio rows and the post page use
+   their full width; Messages is a full-height chat window.
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* Compact page header: one tight block instead of a tall, mostly empty band. */
+.page-head {
+  align-items: center;
+  gap: 14px 18px;
+  padding: 14px 20px;
+}
+
+.page-head p {
+  margin: 0 0 2px;
+}
+
+.page-head h1 {
+  font-size: clamp(1.6rem, 2.4vw, 2.2rem);
+}
+
+.page-lede {
+  margin-top: 6px;
+  max-width: 80ch;
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
+.discover-hero {
+  gap: 14px;
+  padding: clamp(18px, 2.4vw, 26px);
+}
+
+.discover-hero h1 {
+  font-size: clamp(1.8rem, 3.2vw, 2.8rem);
+}
+
+/* Panels hug their content: in a grid row they used to stretch to the
+   tallest neighbour and spread their own rows apart (Friends columns,
+   profile "Featured Posts"). */
+.three-columns {
+  align-items: start;
+}
+
+.side-box,
+.profile-feature-card,
+.settings-cluster,
+.list-panel,
+.content-panel {
+  align-content: start;
+}
+
+.empty-state {
+  min-height: 140px;
+  padding: 22px;
+}
+
+/* Settings: the preview column is much shorter than the form -- keep it
+   on screen while the form scrolls. */
+.settings-preview-column {
+  position: sticky;
+  top: 100px;
+}
+
+.settings-preview-column .profile-settings-preview {
+  position: static;
+}
+
+/* Profile stat tiles: number and label, no tall empty box around them. */
+.profile-stat-card {
+  gap: 2px;
+  min-height: 0;
+  padding: 10px 12px;
+}
+
+/* ── Post page ──────────────────────────────────────────────────────────── */
+.detail-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+  min-width: 0;
+}
+
+.side-disclosure {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius);
+  background: var(--glass-fill-soft);
+  box-shadow: var(--glass-edge);
+}
+
+.side-disclosure > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  color: var(--text);
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+
+.side-disclosure > summary::-webkit-details-marker {
+  display: none;
+}
+
+.side-disclosure > summary::after {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg) translateY(-2px);
+  transition: transform var(--motion-fast);
+}
+
+.side-disclosure[open] > summary::after {
+  transform: rotate(-135deg) translateY(-2px);
+}
+
+.side-disclosure > summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius);
+}
+
+/* The panel inside already has the summary as its title. */
+.side-disclosure > .side-box {
+  margin: 0 10px 10px;
+}
+
+.side-disclosure > .side-box > h3:first-child {
+  display: none;
+}
+
+/* ── Studio rows: thumbnail left, details + controls across the rest ─── */
+.studio-item {
+  grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-areas:
+    "thumb info"
+    "thumb actions";
+  align-items: start;
+  gap: 10px 18px;
+}
+
+.studio-thumb {
+  grid-area: thumb;
+}
+
+.studio-info {
+  grid-area: info;
+  min-width: 0;
+}
+
+.studio-actions {
+  grid-area: actions;
+  min-width: 0;
+}
+
+.studio-actions > .side-box {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 18px;
+  padding: 12px 14px;
+}
+
+.studio-actions > .side-box > h3 {
+  display: none;
+}
+
+.studio-actions > .side-box > .field {
+  flex: 1 1 170px;
+  min-width: 0;
+}
+
+.studio-actions > .side-box > .check-row {
+  min-height: 40px;
+}
+
+.studio-actions > .side-box > .field-hint {
+  order: 10;
+  flex-basis: 100%;
+  margin: 0;
+}
+
+.studio-actions > .side-box > .inline-controls {
+  margin-left: auto;
+}
+
+/* ── Messages: a full-height chat window ────────────────────────────────── */
+.page-messages .split-view {
+  height: max(460px, calc(100dvh - 250px));
+  align-items: stretch;
+}
+
+.page-messages .split-view > .list-panel {
+  overflow-y: auto;
+}
+
+.page-messages .split-view > .content-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.page-messages .messages-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  /* Messages stack from the top at their natural height; the list, not
+     the rows, takes up the spare space. */
+  align-content: start;
+}
+
+@media (max-width: 1180px) {
+  .settings-preview-column {
+    position: static;
+  }
+
+  .page-messages .split-view {
+    height: auto;
+  }
+
+  .page-messages .messages-list {
+    max-height: 60vh;
+  }
+}
+
+@media (max-width: 760px) {
+  .studio-item {
+    grid-template-columns: 110px minmax(0, 1fr);
+    grid-template-areas:
+      "thumb info"
+      "actions actions";
+  }
+
+  .page-head {
+    padding: 12px 14px;
+  }
+}
