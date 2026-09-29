@@ -6,6 +6,7 @@ import { PAGE_SIZE } from "../config.js";
 import { CategoryPills, DiscoverMemories, DiscoverTrending } from "../components/discover.jsx";
 import { MediaGrid } from "../components/media.jsx";
 import { EmptyState, Notice, Page, Segmented, TagCloud } from "../components/ui.jsx";
+import { retryDelayMs, useAutoRetry } from "../hooks/useAutoRetry.js";
 import { appendUniqueMedia, preloadMediaAssets, replaceMedia } from "../utils/media.js";
 
 function timeOfDayGreeting(user) {
@@ -155,8 +156,10 @@ export function DiscoverPage({ ctx }) {
   // overwrite the results of the newer one, or append its page onto them.
   const generationRef = useRef(0);
   // Set when loading the next page fails; stops the scroll sentinel from
-  // re-firing the same failing request in a loop until the viewer retries.
+  // re-firing the same failing request in a tight loop. useAutoRetry below
+  // retries it on a backoff instead (moreFailures = consecutive failures).
   const [moreError, setMoreError] = useState("");
+  const [moreFailures, setMoreFailures] = useState(0);
 
   const pageSize = pageSizeFor(ctx.settings);
 
@@ -187,7 +190,6 @@ export function DiscoverPage({ ctx }) {
     const path = `/api/media${toQuery(queryParams)}`;
     const generation = append ? generationRef.current : ++generationRef.current;
     const isCurrent = () => generation === generationRef.current;
-    if (append) setMoreError("");
     try {
       const data = append
         ? await apiFetch(path)
@@ -196,6 +198,8 @@ export function DiscoverPage({ ctx }) {
       const rows = data.media || [];
       const pageItems = rows.slice(0, pageSize);
       if (append) {
+        setMoreError("");
+        setMoreFailures(0);
         setItems((prev) => appendUniqueMedia(prev, pageItems));
       } else {
         setItems(pageItems);
@@ -209,6 +213,7 @@ export function DiscoverPage({ ctx }) {
         // Roll the page counter back so a retry asks for the same page.
         pageRef.current = Math.max(1, page - 1);
         setMoreError(err.message || "Could not load more posts.");
+        setMoreFailures((count) => count + 1);
       }
     } finally {
       if (!append) { if (isCurrent()) setLoading(false); }
@@ -224,6 +229,7 @@ export function DiscoverPage({ ctx }) {
       pageRef.current = 1;
       setHasNext(false);
       setMoreError("");
+      setMoreFailures(0);
       setError("");
       setItems([]);
       loadMedia({ page: 1, append: false });
@@ -262,6 +268,19 @@ export function DiscoverPage({ ctx }) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
+  const loadNextPage = useCallback(() => {
+    const nextPage = pageRef.current + 1;
+    pageRef.current = nextPage;
+    setLoadingMore(true);
+    loadMedia({ page: nextPage, append: true });
+  }, [loadMedia]);
+
+  useAutoRetry({
+    failures: moreFailures,
+    enabled: hasNext && !loading && !loadingMore,
+    onRetry: loadNextPage,
+  });
+
   // Infinite scroll sentinel
   useEffect(() => {
     const sentinel = sentinelRef.current;
@@ -269,17 +288,14 @@ export function DiscoverPage({ ctx }) {
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry.isIntersecting && hasNext && !loadingMore && !loading && !moreError) {
-          const nextPage = pageRef.current + 1;
-          pageRef.current = nextPage;
-          setLoadingMore(true);
-          loadMedia({ page: nextPage, append: true });
+          loadNextPage();
         }
       },
       { rootMargin: "300px" },
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [hasNext, loadingMore, loading, loadMedia, moreError]);
+  }, [hasNext, loadingMore, loading, loadNextPage, moreError]);
 
   function updateFilter(key, value) {
     setFilters((current) => ({
@@ -317,6 +333,7 @@ export function DiscoverPage({ ctx }) {
   function refreshFeed() {
     pageRef.current = 1;
     setMoreError("");
+    setMoreFailures(0);
     setItems([]);
     setHasNext(false);
     setLoadingMore(false);
@@ -629,19 +646,18 @@ export function DiscoverPage({ ctx }) {
               restored scroll position that lands past it); this always
               works, and pressing it is also how a screen-reader user
               gets to page two at all. */}
-          {moreError && !loadingMore ? <Notice kind="error">{moreError}</Notice> : null}
+          {moreError && !loadingMore ? (
+            <Notice kind="error">
+              {moreError} Retrying automatically in {Math.round(retryDelayMs(moreFailures) / 1000)}s.
+            </Notice>
+          ) : null}
           {hasNext && !loadingMore && !loading ? (
             <div className="load-more-row">
               <button
                 type="button"
-                onClick={() => {
-                  const nextPage = pageRef.current + 1;
-                  pageRef.current = nextPage;
-                  setLoadingMore(true);
-                  loadMedia({ page: nextPage, append: true });
-                }}
+                onClick={loadNextPage}
               >
-                {moreError ? "Try again" : "Load more"}
+                {moreError ? "Retry now" : "Load more"}
               </button>
             </div>
           ) : null}
