@@ -4,6 +4,7 @@ import { apiFetch } from "../api.js";
 import { useLiveRefresh } from "../hooks/useLiveRefresh.js";
 import { FriendColumn } from "../components/social.jsx";
 import { EmptyState, Page, RequireLogin, SkeletonGrid, UserMini } from "../components/ui.jsx";
+import { reconcileValue } from "../utils/reconcile.js";
 
 export function FriendsPage({ ctx }) {
   const [state, setState] = useState({ incoming: [], outgoing: [], friends: [] });
@@ -20,7 +21,7 @@ export function FriendsPage({ ctx }) {
         apiFetch("/api/friends/requests"),
         apiFetch("/api/me/friends"),
       ]);
-      setState({ incoming: requests.incoming || [], outgoing: requests.outgoing || [], friends: friends.friends || [] });
+      setState((current) => reconcileValue(current, { incoming: requests.incoming || [], outgoing: requests.outgoing || [], friends: friends.friends || [] }));
     } catch (error) {
       if (!background) showToast(error.message, "error");
     } finally {

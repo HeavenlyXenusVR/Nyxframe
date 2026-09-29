@@ -50,13 +50,49 @@ local EXACT_ASSETS = {
   { path = "/static/react/service-worker.js", file = "../static/react/service-worker.js" },
 }
 
+-- Content-hashed build files never change under a given name, so they are
+-- kept in memory after the first read (bounded, in case many builds'
+-- worth of names get requested over a long uptime) and sent with a
+-- year-long immutable cache header -- the browser never re-requests them.
+-- Everything else (index.html, the service worker, icons) keeps a short or
+-- no-cache policy so a new deploy is picked up right away: a stale
+-- index.html pointing at chunk names the new build deleted is exactly how
+-- lazy-loaded pages break after a deploy.
+local HASHED_CACHE_LIMIT = 64
+local hashed_cache = {}
+local hashed_cache_count = 0
+
+local function is_hashed_asset(relpath)
+  return relpath:find("/static/react/assets/", 1, true) ~= nil
+    and relpath:match("%-[%w_%-]+%.%w+$") ~= nil
+end
+
+local function cache_control_for(relpath)
+  if is_hashed_asset(relpath) then return "public, max-age=31536000, immutable" end
+  local name = relpath:match("([^/]+)$") or ""
+  if name == "index.html" or name == "service-worker.js" then return "no-cache" end
+  return "public, max-age=300"
+end
+
 local function serve_file(relpath)
-  local data = read_file(relpath)
-  if not data then return 404, "Not found", { ["Content-Type"] = "text/plain" } end
+  local hashed = is_hashed_asset(relpath)
+  local data = hashed and hashed_cache[relpath] or nil
+  if not data then
+    data = read_file(relpath)
+    if not data then return 404, "Not found", { ["Content-Type"] = "text/plain" } end
+    if hashed and not relpath:match("%.map$") then
+      if hashed_cache_count >= HASHED_CACHE_LIMIT then
+        hashed_cache = {}
+        hashed_cache_count = 0
+      end
+      hashed_cache[relpath] = data
+      hashed_cache_count = hashed_cache_count + 1
+    end
+  end
   local content_type = CONTENT_TYPES[ext_of(relpath)] or "application/octet-stream"
   return 200, data, {
     ["Content-Type"] = content_type,
-    ["Cache-Control"] = "public, max-age=300",
+    ["Cache-Control"] = cache_control_for(relpath),
   }
 end
 
@@ -69,7 +105,13 @@ function M.register()
   -- when sourcemaps are enabled) -- filenames change per build, so a single
   -- parametric route beats hardcoding today's hashes.
   httpd.route("GET", "/static/react/assets/:file", function(req)
-    return serve_file("../static/react/assets/" .. req.params.file)
+    local file = req.params.file or ""
+    -- Build output is flat (no subdirectories); refuse anything that could
+    -- walk out of the assets directory.
+    if file == "" or file:find("..", 1, true) or file:find("/", 1, true) or file:find("\\", 1, true) then
+      return 404, "Not found", { ["Content-Type"] = "text/plain" }
+    end
+    return serve_file("../static/react/assets/" .. file)
   end)
 end
 

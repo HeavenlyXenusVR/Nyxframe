@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { UserPlus } from "lucide-react";
 import { apiFetch, cachedApiFetch, prefetchApi, toQuery } from "../api.js";
@@ -7,6 +7,7 @@ import { PAGE_SIZE } from "../config.js";
 import { MediaGrid } from "../components/media.jsx";
 import { EmptyState, Notice, Page, Pager, RequireLogin } from "../components/ui.jsx";
 import { preloadMediaAssets, replaceMedia } from "../utils/media.js";
+import { reconcileList } from "../utils/reconcile.js";
 
 function pageSizeFor(settings) {
   const parsed = Number(settings?.items_per_page);
@@ -27,8 +28,12 @@ export function FeedPage({ ctx, mode }) {
   const userId = ctx.user?.id;
   const handleItemUpdated = useCallback((item) => setItems((rows) => replaceMedia(rows, item)), []);
 
+  // Latest request wins: flipping pages quickly (or a background refresh
+  // overlapping a page change) must not let an older response land last.
+  const requestRef = useRef(0);
   const loadFeed = useCallback(({ background = false } = {}) => {
     if (!userId) return Promise.resolve();
+    const requestId = ++requestRef.current;
     return (async () => {
       if (!background) setLoading(true);
       if (!background) setError("");
@@ -37,17 +42,18 @@ export function FeedPage({ ctx, mode }) {
         const data = background
           ? await apiFetch(path)
           : await cachedApiFetch(path, { ttl: 20_000, staleTtl: 3 * 60_000 });
+        if (requestId !== requestRef.current) return;
         const rows = data.media || [];
-        setItems(rows.slice(0, pageSize));
+        setItems((current) => reconcileList(current, rows.slice(0, pageSize)));
         setHasNext(rows.length > pageSize);
         preloadMediaAssets(rows, { limit: 6 });
         if (rows.length > pageSize) {
           prefetchApi(`${endpoint}${toQuery({ limit: pageSize + 1, offset: page * pageSize })}`, { ttl: 30_000, staleTtl: 3 * 60_000 });
         }
       } catch (fetchError) {
-        if (!background) setError(fetchError.message);
+        if (!background && requestId === requestRef.current) setError(fetchError.message);
       } finally {
-        if (!background) setLoading(false);
+        if (!background && requestId === requestRef.current) setLoading(false);
       }
     })();
   }, [userId, endpoint, page, pageSize]);

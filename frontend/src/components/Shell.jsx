@@ -6,6 +6,7 @@ import { useLiveRefresh } from "../hooks/useLiveRefresh.js";
 import { getPendingUploadJobs, removePendingUploadJob } from "../uploadJobs.js";
 import { Avatar, BackToTop, GlassFilterDefs, glassPointerMove } from "./ui.jsx";
 import { NotificationBell } from "./NotificationBell.jsx";
+import { reconcileValue } from "../utils/reconcile.js";
 
 // The primary nav has grown to eleven entries for a signed-in owner.
 // That is fine on a wide screen and impossible on a phone: the fixed
@@ -122,7 +123,8 @@ export function Shell({ ctx, children, className = "", style }) {
 
   useLiveRefresh(async () => {
     try {
-      setSite(await cachedApiFetch("/api/site/announcement", { ttl: 30_000 }));
+      const next = await cachedApiFetch("/api/site/announcement", { ttl: 30_000 });
+      setSite((current) => reconcileValue(current, next));
     } catch (_error) {
       // Non-critical — keep the last known state rather than erroring the shell.
     }

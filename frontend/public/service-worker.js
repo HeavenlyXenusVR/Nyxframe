@@ -22,6 +22,23 @@ self.addEventListener("activate", (event) => {
   );
 });
 
+// Each deploy produces new hashed filenames, so without pruning the cache
+// keeps every build's bundles forever. Oldest entries go first.
+const MAX_HASHED_ASSETS = 60;
+
+function isHashedAsset(url) {
+  return url.pathname.startsWith("/static/react/assets/") && !url.pathname.endsWith(".map");
+}
+
+async function pruneAssets(cache) {
+  const keys = await cache.keys();
+  const hashed = keys.filter((request) => isHashedAsset(new URL(request.url)));
+  const excess = hashed.length - MAX_HASHED_ASSETS;
+  for (let index = 0; index < excess; index += 1) {
+    await cache.delete(hashed[index]);
+  }
+}
+
 function isCacheableAsset(url) {
   return url.pathname.startsWith("/static/react/assets/")
     || url.pathname.startsWith("/static/react/pwa-")
@@ -40,6 +57,24 @@ self.addEventListener("fetch", (event) => {
   if (request.mode === "navigate") {
     event.respondWith(
       fetch(request).catch(() => caches.match("/").then((cached) => cached || Response.error())),
+    );
+    return;
+  }
+
+  if (isHashedAsset(url)) {
+    // Content-hashed build files never change under a given name: serve
+    // straight from cache and only touch the network on a miss. (This used
+    // to re-download every asset in the background on every page load.)
+    event.respondWith(
+      caches.open(CACHE_VERSION).then(async (cache) => {
+        const cached = await cache.match(request);
+        if (cached) return cached;
+        const response = await fetch(request);
+        if (response.ok) {
+          event.waitUntil(cache.put(request, response.clone()).then(() => pruneAssets(cache)));
+        }
+        return response;
+      }),
     );
     return;
   }

@@ -4,6 +4,7 @@ import { cachedApiFetch, toQuery } from "../api.js";
 import { useLiveRefresh } from "../hooks/useLiveRefresh.js";
 import { UserCard } from "../components/social.jsx";
 import { EmptyState, Page, SkeletonGrid } from "../components/ui.jsx";
+import { reconcileList } from "../utils/reconcile.js";
 
 // Same class of bug as DiscoverPage's filters (see its FILTERS_SESSION_KEY
 // doc comment): plain local state, no URL involved at all here, so
@@ -33,7 +34,7 @@ export function UsersPage({ ctx }) {
         staleTtl: 30_000,
         allowStale: !background,
       });
-      setUsers(data.users || []);
+      setUsers((current) => reconcileList(current, data.users || []));
     } catch (error) {
       if (!background) showToast(error.message, "error");
     } finally {

@@ -5,6 +5,7 @@ import { apiFetch, toQuery } from "../api.js";
 import { MediaGrid } from "../components/media.jsx";
 import { Page } from "../components/ui.jsx";
 import { appendUniqueMedia, replaceMedia } from "../utils/media.js";
+import { useAutoRetry } from "../hooks/useAutoRetry.js";
 
 const PAGE_SIZE = 24;
 
@@ -20,6 +21,7 @@ export function SimilarMediaPage({ ctx }) {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
+  const [moreFailures, setMoreFailures] = useState(0);
   const pageRef = useRef(1);
   const sentinelRef = useRef(null);
 
@@ -32,9 +34,14 @@ export function SimilarMediaPage({ ctx }) {
       const rows = data.media || [];
       const pageItems = rows.slice(0, PAGE_SIZE);
       setItems((prev) => (append ? appendUniqueMedia(prev, pageItems) : pageItems));
+      setMoreFailures(0);
       setHasNext(rows.length > PAGE_SIZE);
     } catch (err) {
       if (!append) { setError(err.message); setItems([]); setHasNext(false); }
+      // A failed next page pauses the sentinel (otherwise it re-fires the
+      // same failing request in a tight loop while it stays on screen) and
+      // useAutoRetry below tries again on a backoff.
+      else { pageRef.current = Math.max(1, page - 1); setMoreFailures((count) => count + 1); }
     } finally {
       if (!append) setLoading(false);
       else setLoadingMore(false);
@@ -43,6 +50,7 @@ export function SimilarMediaPage({ ctx }) {
 
   useEffect(() => {
     pageRef.current = 1;
+    setMoreFailures(0);
     load({ page: 1, append: false });
   }, [load]);
 
@@ -51,7 +59,7 @@ export function SimilarMediaPage({ ctx }) {
     if (!sentinel) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting && hasNext && !loadingMore && !loading) {
+        if (entry.isIntersecting && hasNext && !loadingMore && !loading && !moreFailures) {
           const nextPage = pageRef.current + 1;
           pageRef.current = nextPage;
           setLoadingMore(true);
@@ -62,7 +70,18 @@ export function SimilarMediaPage({ ctx }) {
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [hasNext, loadingMore, loading, load]);
+  }, [hasNext, loadingMore, loading, load, moreFailures]);
+
+  useAutoRetry({
+    failures: moreFailures,
+    enabled: hasNext && !loading && !loadingMore,
+    onRetry: () => {
+      const nextPage = pageRef.current + 1;
+      pageRef.current = nextPage;
+      setLoadingMore(true);
+      load({ page: nextPage, append: true });
+    },
+  });
 
   return (
     <Page

@@ -7,8 +7,12 @@ import { Avatar, ChipRow, glassPointerMove, ResilientImage, StatsRow } from "./u
 import { VideoPlayer } from "./VideoPlayer.jsx";
 import { isGifMedia, mediaImageSources, thumbUrl, videoQualityUrl } from "../utils/media.js";
 
-export function Lightbox({ ctx }) {
-  const { lightbox, closeLightbox } = ctx;
+// `lightbox` is a prop rather than part of ctx: ctx is handed to every
+// card on the page, so carrying the lightbox state in it re-rendered the
+// whole grid behind the overlay on every open, close and swipe.
+export function Lightbox({ ctx, lightbox: lightboxProp }) {
+  const lightbox = lightboxProp ?? ctx.lightbox;
+  const { closeLightbox } = ctx;
   const items = lightbox?.items || [];
 
   const [currentIndex, setCurrentIndex] = useState(lightbox?.index ?? 0);

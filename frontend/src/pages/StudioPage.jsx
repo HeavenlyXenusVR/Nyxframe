@@ -6,6 +6,7 @@ import { useLiveRefresh } from "../hooks/useLiveRefresh.js";
 import { StudioItem } from "../components/media.jsx";
 import { EmptyState, Metric, Page, RequireLogin, SkeletonList } from "../components/ui.jsx";
 import { replaceMedia } from "../utils/media.js";
+import { reconcileList } from "../utils/reconcile.js";
 
 // Minimal inline-SVG bar chart -- deliberately no charting library (none is
 // installed; this app's frontend footprint is otherwise dependency-light).
@@ -180,7 +181,7 @@ export function StudioPage({ ctx }) {
     if (!background) setLoading(true);
     try {
       const data = await apiFetch("/api/me/media?include_deleted=true");
-      setItems(data.media || []);
+      setItems((current) => reconcileList(current, data.media || []));
     } catch (error) {
       if (!background) showToast(error.message, "error");
     } finally {

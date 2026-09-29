@@ -4,6 +4,7 @@ import { MessageCircle, Plus, RefreshCw, Search, Send, Users, X as XIcon } from 
 import { apiFetch, cachedApiFetch, toQuery } from "../api.js";
 import { useLiveRefresh } from "../hooks/useLiveRefresh.js";
 import { Avatar, EmptyState, Page, RequireLogin, SkeletonList } from "../components/ui.jsx";
+import { reconcileList } from "../utils/reconcile.js";
 
 export function MessagesPage({ ctx }) {
   const location = useLocation();
@@ -23,6 +24,8 @@ export function MessagesPage({ ctx }) {
   const [groupMembers, setGroupMembers] = useState([]);
   const [creatingGroup, setCreatingGroup] = useState(false);
   const messagesEndRef = useRef(null);
+  const listRef = useRef(null);
+  const [sending, setSending] = useState(false);
 
   const selectedId = selectedUser?.user_id || selectedUser?.id;
   const activeGroupId = selectedGroup?.id;
@@ -30,12 +33,36 @@ export function MessagesPage({ ctx }) {
   const showToast = ctx.showToast;
   const userId = ctx.user?.id;
 
-  // Auto-scroll to bottom when messages change
+  // Which conversation is open, as a stable key. Every fetch captures it
+  // and drops its result if the viewer switched conversations meanwhile --
+  // otherwise a slow response for the previous chat could replace the one
+  // on screen with someone else's messages.
+  const conversationKey = activeGroupId ? `g:${activeGroupId}` : selectedId ? `u:${selectedId}` : "";
+  const conversationRef = useRef(conversationKey);
+  conversationRef.current = conversationKey;
+
+  // Keep the list pinned to the newest message -- but only when a new
+  // message actually arrived (or the conversation changed) and the viewer
+  // was already at the bottom. This used to scrollIntoView() on every
+  // 12-second poll, which yanked the viewer back down while they were
+  // reading older messages, and scrolled the whole page along with it.
+  const lastMessageId = messages.length ? messages[messages.length - 1]?.id : null;
+  const scrolledKeyRef = useRef("");
+  const stickToBottomRef = useRef(true);
   useEffect(() => {
-    if (messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [messages]);
+    const list = listRef.current;
+    if (!list) return;
+    const conversationChanged = scrolledKeyRef.current !== conversationKey;
+    if (!conversationChanged && !stickToBottomRef.current) return;
+    scrolledKeyRef.current = conversationKey;
+    list.scrollTop = list.scrollHeight;
+  }, [conversationKey, lastMessageId]);
+
+  const onListScroll = useCallback(() => {
+    const list = listRef.current;
+    if (!list) return;
+    stickToBottomRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+  }, []);
 
   const loadThreads = useCallback(async ({ background = false } = {}) => {
     if (!userId) return;
@@ -45,8 +72,8 @@ export function MessagesPage({ ctx }) {
         apiFetch("/api/messages/threads"),
         apiFetch("/api/threads").catch(() => ({ threads: [] })),
       ]);
-      setThreads(dmData.threads || []);
-      setGroups(groupData.threads || []);
+      setThreads((current) => reconcileList(current, dmData.threads || [], "user_id"));
+      setGroups((current) => reconcileList(current, groupData.threads || []));
       if (!didAutoSelect.current && (dmData.threads?.length || groupData.threads?.length)) {
         didAutoSelect.current = true;
         if (dmData.threads?.length) setSelectedUser(dmData.threads[0]);
@@ -60,23 +87,33 @@ export function MessagesPage({ ctx }) {
   }, [userId, showToast]);
 
   const loadMessages = useCallback(async ({ background = false } = {}) => {
+    const requestedKey = activeGroupId ? `g:${activeGroupId}` : selectedId ? `u:${selectedId}` : "";
+    const stale = () => requestedKey !== conversationRef.current;
+    if (!background) {
+      // Don't show the previous conversation's messages under the new name
+      // while the new ones load.
+      setMessages([]);
+      stickToBottomRef.current = true;
+    }
     if (activeGroupId) {
       try {
         const data = await apiFetch(`/api/threads/${activeGroupId}/messages`);
-        setMessages(data.messages || []);
+        if (stale()) return;
+        setMessages((current) => reconcileList(current, data.messages || []));
         if (background) loadThreads({ background: true });
       } catch (error) {
-        if (!background) showToast(error.message, "error");
+        if (!background && !stale()) showToast(error.message, "error");
       }
       return;
     }
     if (!selectedId) return;
     try {
       const data = await apiFetch(`/api/messages/${selectedId}`);
-      setMessages(data.messages || []);
+      if (stale()) return;
+      setMessages((current) => reconcileList(current, data.messages || []));
       if (background) loadThreads({ background: true });
     } catch (error) {
-      if (!background) showToast(error.message, "error");
+      if (!background && !stale()) showToast(error.message, "error");
     }
   }, [selectedId, activeGroupId, loadThreads, showToast]);
 
@@ -142,20 +179,29 @@ export function MessagesPage({ ctx }) {
 
   async function sendMessage(event) {
     event.preventDefault();
-    if (!body.trim()) return;
+    // Guard against double-submits (Enter + click, or a slow connection)
+    // posting the same message twice.
+    if (!body.trim() || sending) return;
+    setSending(true);
+    stickToBottomRef.current = true;
+    const sentFrom = conversationRef.current;
+    const appendSent = (message) => {
+      if (!message || sentFrom !== conversationRef.current) return;
+      setMessages((current) => (current.some((row) => row.id === message.id) ? current : [...current, message]));
+    };
     try {
       if (activeGroupId) {
         const data = await apiFetch(`/api/threads/${activeGroupId}/messages`, {
           method: "POST",
           body: JSON.stringify({ body: body.trim() }),
         });
-        setMessages((current) => [...current, data.message]);
+        appendSent(data.message);
       } else if (selectedId) {
         const data = await apiFetch(`/api/messages/${selectedId}`, {
           method: "POST",
           body: JSON.stringify({ body: body.trim() }),
         });
-        setMessages((current) => [...current, data.message]);
+        appendSent(data.message);
       } else {
         return;
       }
@@ -163,6 +209,8 @@ export function MessagesPage({ ctx }) {
       loadThreads({ background: true });
     } catch (error) {
       ctx.showToast(error.message, "error");
+    } finally {
+      setSending(false);
     }
   }
 
@@ -285,7 +333,7 @@ export function MessagesPage({ ctx }) {
         </aside>
         <section className="content-panel">
           <div className="section-head"><h2>{activeName}</h2>{activeGroupId ? <Users size={18} /> : <MessageCircle size={18} />}</div>
-          <div className="comments-list messages-list">
+          <div className="comments-list messages-list" ref={listRef} onScroll={onListScroll}>
             {messages.map((message) => (
               <article className="comment" key={message.id}>
                 <Avatar user={activeGroupId ? { ...message, avatar_path: message.user_avatar_path } : message} compact />
@@ -301,7 +349,7 @@ export function MessagesPage({ ctx }) {
           {selectedId || activeGroupId ? (
             <form className="comment-form" onSubmit={sendMessage}>
               <input value={body} onChange={(event) => setBody(event.target.value)} placeholder="Write a message" maxLength={2000} />
-              <button type="submit"><Send size={16} />Send</button>
+              <button type="submit" disabled={sending}><Send size={16} />{sending ? "Sending" : "Send"}</button>
             </form>
           ) : null}
         </section>
