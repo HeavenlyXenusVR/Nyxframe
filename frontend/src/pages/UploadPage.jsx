@@ -137,6 +137,7 @@ export function UploadPage({ ctx }) {
     file: null,
     title: "",
     description: "",
+    source_url: "",
     category: "",
     subcategories: blankSubcategorySlots(),
     tags: "",
@@ -268,6 +269,7 @@ export function UploadPage({ ctx }) {
       body.set("file", form.file);
       body.set("title", form.title);
       body.set("description", form.description);
+      if (form.source_url.trim()) body.set("source_url", form.source_url.trim());
       body.set("tags", form.tags);
       // AI vision analysis can legitimately take up to ai_timeout_seconds+10 on the
       // backend (default 55s) before falling back to local heuristics, well past the
@@ -324,6 +326,7 @@ export function UploadPage({ ctx }) {
       if (form.file) body.set("file", form.file);
       body.set("title", form.title);
       body.set("description", form.description);
+      if (form.source_url.trim()) body.set("source_url", form.source_url.trim());
       const placement = resolvePlacement(ctx.lookups.categories, form.category, form.subcategories);
       body.set("category_id", placement.categoryId);
       body.set("category_name", placement.categoryName);
@@ -579,6 +582,10 @@ export function UploadPage({ ctx }) {
             <label className="field">
               <span className="field-head">Description<small aria-hidden="true">{form.description.length}/2000</small></span>
               <textarea value={form.description} onChange={(event) => update("description", event.target.value)} rows={4} maxLength={2000} placeholder="Optional" />
+            </label>
+            <label className="field">
+              <span className="field-head">Original source</span>
+              <input value={form.source_url} onChange={(event) => update("source_url", event.target.value)} type="url" inputMode="url" maxLength={500} placeholder="https://… where you got this (optional)" />
             </label>
             <label className="field">
               <span>Tags</span>

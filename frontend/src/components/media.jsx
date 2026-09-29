@@ -277,6 +277,7 @@ function draftFromMedia(media) {
     subcategory_ids: slots(media.subcategory_ids),
     subcategory_names: slots([]),
     is_adult: Boolean(media.is_adult),
+    source_url: media.source_url || "",
   };
 }
 
@@ -330,6 +331,10 @@ export function MediaEditor({ ctx, media, onChanged }) {
           subcategory_ids: slots(draft.subcategory_ids).filter(Boolean).map(Number),
           subcategory_names: slots(draft.subcategory_names).map((v) => v.trim()).filter(Boolean),
           is_adult: draft.is_adult,
+          // Explicit null rather than "" so the server's sparse contract
+          // reads it as "clear it" instead of "leave it alone" -- otherwise
+          // emptying the box in the UI would silently do nothing.
+          source_url: draft.source_url.trim() || null,
           // Echoed, not edited -- see this component's header comment.
           visibility: media.visibility || "public",
           comments_enabled: media.comments_enabled !== false,
@@ -353,6 +358,7 @@ export function MediaEditor({ ctx, media, onChanged }) {
       <label className="field"><span>Title</span><input value={draft.title} onChange={(event) => set("title", event.target.value)} maxLength={160} /></label>
       <label className="field"><span>Description</span><textarea value={draft.description} onChange={(event) => set("description", event.target.value)} rows={4} maxLength={2000} /></label>
       <label className="field"><span>Tags</span><input value={draft.tags} onChange={(event) => set("tags", event.target.value)} placeholder="comma separated" /></label>
+      <label className="field"><span>Original source</span><input value={draft.source_url} onChange={(event) => set("source_url", event.target.value)} type="url" inputMode="url" maxLength={500} placeholder="https://… where this came from" /></label>
       <label className="field"><span>Category</span>
         <select value={draft.category_id} onChange={(event) => setDraft((current) => ({ ...current, category_id: event.target.value, subcategory_ids: slots([]) }))}>
           <option value="">Select a category</option>

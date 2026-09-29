@@ -10,6 +10,10 @@ struct MediaItem: Codable, Identifiable, Hashable {
     var id: Int
     var title: String?
     var description: String?
+    /// Where the uploader got the media from. Decoded from `source_url`.
+    /// Optional like the rest of this model -- endpoints that strip fields
+    /// for locked/adult media omit it entirely.
+    var sourceUrl: String?
     var tags: [String]?
     var mediaKind: String?
     var url: String?

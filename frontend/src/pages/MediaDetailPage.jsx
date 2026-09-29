@@ -329,6 +329,17 @@ export function MediaDetailPage({ ctx }) {
         <aside className="detail-side">
           <UserLine user={media} />
           {media.description ? <p className="description">{media.description}</p> : null}
+          {media.source_url ? (
+            <p className="media-source">
+              <span>Original source: </span>
+              {/* noopener+noreferrer+nofollow: this is an uploader-supplied
+                  outbound link, so it must not leak the referrer or pass
+                  ranking. The server only ever stores http/https here. */}
+              <a href={media.source_url} target="_blank" rel="noopener noreferrer nofollow">
+                {(() => { try { return new URL(media.source_url).hostname.replace(/^www\./, ""); } catch { return media.source_url; } })()}
+              </a>
+            </p>
+          ) : null}
           <StatsRow item={media} />
           <ChipRow values={metadataChips} />
           {ctx.user ? (

@@ -860,6 +860,34 @@ local function with_urls(req, row, adult_allowed)
   return row
 end
 
+-- Original-source attribution. Kept as a method on M rather than a
+-- top-level local deliberately: this file sits at 199 top-level locals and
+-- LuaJIT's ceiling is 200, so a new `local function` here would cost the
+-- last slot for no benefit.
+--
+-- Returns (url, nil) on success, (nil, nil) when the field was simply not
+-- supplied, and (nil, message) when it was supplied but unusable. Only
+-- http/https pass: the value is rendered as a link in the UI, so accepting
+-- javascript:/data:/vbscript: here would be a stored-XSS vector.
+function M.normalize_source_url(value)
+  local raw = value
+  if raw == nil or raw == cjson.null then return nil, nil end
+  raw = trim(tostring(raw))
+  if raw == "" then return nil, nil end
+  if #raw > 500 then return nil, "Source link must be 500 characters or fewer." end
+  if raw:find("%s") or raw:find("%c") then return nil, "Source link cannot contain spaces." end
+  local scheme = raw:match("^(%a[%w+.-]*):")
+  if not scheme then return nil, "Source link must start with http:// or https://." end
+  scheme = scheme:lower()
+  if scheme ~= "http" and scheme ~= "https" then
+    return nil, "Source link must start with http:// or https://."
+  end
+  if not raw:match("^https?://[^/]+") then
+    return nil, "Source link must include a domain, like https://example.com/post/1."
+  end
+  return raw, nil
+end
+
 local function decode_media_row(row, viewer_can_open_adult, req)
   numify_media(row)
   row.is_adult = db.tobool(row.is_adult)
@@ -1233,7 +1261,7 @@ function M.list_media(req)
            m.media_kind, m.mime_type, m.original_filename, m.storage_path, m.file_size,
            m.views, m.downloads, m.created_at, m.updated_at, m.visibility,
            m.comments_enabled, m.downloads_enabled, m.pinned_at, m.is_adult,
-           m.adult_marked_by_user, m.adult_marked_by_ai, m.moderation_status, m.dominant_color,
+           m.adult_marked_by_user, m.adult_marked_by_ai, m.moderation_status, m.dominant_color, m.source_url,
            c.name AS category_name, c.slug AS category_slug,
            sc.name AS subcategory_name, sc.slug AS subcategory_slug,
            u.username,
@@ -1313,7 +1341,7 @@ local function fetch_media_feed(req, viewer_id, extra_clause, extra_params, orde
            m.media_kind, m.mime_type, m.original_filename, m.storage_path, m.file_size,
            m.views, m.downloads, m.created_at, m.updated_at, m.visibility,
            m.comments_enabled, m.downloads_enabled, m.pinned_at, m.is_adult,
-           m.adult_marked_by_user, m.adult_marked_by_ai, m.moderation_status, m.dominant_color,
+           m.adult_marked_by_user, m.adult_marked_by_ai, m.moderation_status, m.dominant_color, m.source_url,
            c.name AS category_name, c.slug AS category_slug,
            sc.name AS subcategory_name, sc.slug AS subcategory_slug,
            u.username,
@@ -1502,7 +1530,7 @@ function M.my_media(req)
              m.media_kind, m.mime_type, m.original_filename, m.storage_path, m.file_size,
              m.views, m.downloads, m.created_at, m.updated_at, m.visibility,
              m.comments_enabled, m.downloads_enabled, m.pinned_at, m.is_adult,
-             m.adult_marked_by_user, m.adult_marked_by_ai, m.moderation_status, m.dominant_color, m.deleted_at,
+             m.adult_marked_by_user, m.adult_marked_by_ai, m.moderation_status, m.dominant_color, m.source_url, m.deleted_at,
              c.name AS category_name, c.slug AS category_slug,
              sc.name AS subcategory_name, sc.slug AS subcategory_slug,
              u.username, u.display_name, u.profile_color, u.public_profile,
@@ -1636,7 +1664,7 @@ local function fetch_media_by_id(media_id, viewer0)
            m.media_kind, m.mime_type, m.original_filename, m.storage_path, m.file_size,
            m.views, m.downloads, m.created_at, m.updated_at, m.visibility,
            m.comments_enabled, m.downloads_enabled, m.pinned_at, m.is_adult,
-           m.adult_marked_by_user, m.adult_marked_by_ai, m.moderation_status, m.dominant_color,
+           m.adult_marked_by_user, m.adult_marked_by_ai, m.moderation_status, m.dominant_color, m.source_url,
            m.deleted_at, m.publish_at,
            c.name AS category_name, c.slug AS category_slug,
            sc.name AS subcategory_name, sc.slug AS subcategory_slug,
@@ -2863,6 +2891,8 @@ local function finalize_upload(req, user, source, original_filename, form)
 
   local title_raw = trim(nn(form.title) or ""):sub(1, 160)
   local description_raw = trim(nn(form.description) or "")
+  local source_url, source_url_err = M.normalize_source_url(form.source_url)
+  if source_url_err then return 400, { detail = source_url_err } end
   local tags_hint = parse_tags(form.tags)
   local visibility = (nn(form.visibility) or "public"):lower()
   if visibility ~= "public" and visibility ~= "unlisted" and visibility ~= "private" then
@@ -3003,8 +3033,8 @@ local function finalize_upload(req, user, source, original_filename, form)
         (user_id, category_id, subcategory_id, title, description, tags, media_kind, mime_type, original_filename,
          storage_path, file_size, media_file_id, content_sha256, visibility, comments_enabled, downloads_enabled,
          is_adult, adult_marked_by_user, adult_marked_by_ai, moderation_status, moderation_score, moderation_reason, moderated_at,
-         image_phash, image_dhash, image_width, image_height, dominant_color, publish_at)
-      VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now(),%s,%s,%s,%s,%s,%s)
+         image_phash, image_dhash, image_width, image_height, dominant_color, publish_at, source_url)
+      VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now(),%s,%s,%s,%s,%s,%s,%s)
       RETURNING id
     ]],
     tostring(user.id), tostring(category_id), subcategory_id and tostring(subcategory_id) or nil,
@@ -3016,7 +3046,7 @@ local function finalize_upload(req, user, source, original_filename, form)
     fingerprint and fingerprint.image_phash or nil, fingerprint and fingerprint.image_dhash or nil,
     fingerprint and fingerprint.image_width and tostring(fingerprint.image_width) or nil,
     fingerprint and fingerprint.image_height and tostring(fingerprint.image_height) or nil,
-    fingerprint and fingerprint.dominant_color or nil, publish_at
+    fingerprint and fingerprint.dominant_color or nil, publish_at, source_url
   )
   finalize_upload_debug_mark("media_items insert done", debug_t0)
   if not row then return 500, { detail = "Could not save media: " .. tostring(insert_err) } end
@@ -3636,6 +3666,23 @@ local function perform_update_media(media_id, owner_id, payload)
   -- rather than a database error. Stored as naive UTC to match created_at:
   -- this deployment's session timezone is UTC, so `publish_at <= now()` in
   -- the feed queries compares correctly.
+  -- Same explicit-only contract as publish_at below, and for the same
+  -- reason: M.bulk_edit_media rebuilds a full payload from each post's
+  -- current values and its `merged` table carries no source_url, so an
+  -- unconditional write would blank the source of every post caught by an
+  -- unrelated bulk edit. Absent leaves it alone; null/"" clears it.
+  local source_clause, source_param = "", nil
+  if payload.source_url ~= nil then
+    if payload.source_url == cjson.null or trim(tostring(payload.source_url)) == "" then
+      source_clause = ",\n        source_url=NULL"
+    else
+      local normalized, source_err = M.normalize_source_url(payload.source_url)
+      if source_err then return 400, source_err end
+      source_clause = ",\n        source_url=%s"
+      source_param = normalized
+    end
+  end
+
   local publish_clause, publish_param = "", nil
   if payload.publish_at ~= nil then
     local raw = payload.publish_at
@@ -3667,7 +3714,7 @@ local function perform_update_media(media_id, owner_id, payload)
         moderation_status=CASE WHEN %s THEN 'adult' ELSE moderation_status END,
         moderation_reason=CASE WHEN %s THEN 'Uploader marked this post as 18+.' ELSE moderation_reason END,
         moderated_at=CASE WHEN %s THEN CURRENT_TIMESTAMP ELSE moderated_at END]]
-    .. publish_clause .. [[
+    .. source_clause .. publish_clause .. [[
 
     WHERE id=%s AND user_id=%s
   ]]
@@ -3679,6 +3726,9 @@ local function perform_update_media(media_id, owner_id, payload)
   }
   -- Positional, so this has to land between the moderated_at CASE and the
   -- WHERE clause -- exactly where publish_clause was spliced in above.
+  -- Positional: source_clause is spliced BEFORE publish_clause above, so
+  -- its parameter has to be appended first.
+  if source_param then params[#params + 1] = source_param end
   if publish_param then params[#params + 1] = publish_param end
   params[#params + 1] = tostring(media_id)
   params[#params + 1] = owner_id
@@ -5060,7 +5110,7 @@ function M.collection_detail(req)
                m.media_kind, m.mime_type, m.original_filename, m.storage_path, m.file_size,
                m.views, m.downloads, m.created_at, m.updated_at, m.visibility,
                m.comments_enabled, m.downloads_enabled, m.pinned_at, m.is_adult,
-               m.adult_marked_by_user, m.adult_marked_by_ai, m.moderation_status, m.dominant_color,
+               m.adult_marked_by_user, m.adult_marked_by_ai, m.moderation_status, m.dominant_color, m.source_url,
                c.name AS category_name, c.slug AS category_slug,
                sc.name AS subcategory_name, sc.slug AS subcategory_slug,
                u.username,
@@ -5387,7 +5437,7 @@ local function list_profile_media(req, target_id, viewer_id, viewer_can_open_adu
              m.media_kind, m.mime_type, m.original_filename, m.storage_path, m.file_size,
              m.views, m.downloads, m.created_at, m.updated_at, m.visibility,
              m.comments_enabled, m.downloads_enabled, m.pinned_at, m.is_adult,
-             m.adult_marked_by_user, m.adult_marked_by_ai, m.moderation_status, m.dominant_color,
+             m.adult_marked_by_user, m.adult_marked_by_ai, m.moderation_status, m.dominant_color, m.source_url,
              c.name AS category_name, c.slug AS category_slug,
              sc.name AS subcategory_name, sc.slug AS subcategory_slug,
              u.username, u.display_name, u.profile_color, u.public_profile,
