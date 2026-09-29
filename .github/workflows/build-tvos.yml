@@ -1,0 +1,152 @@
+name: Build tvOS app
+
+on:
+  push:
+    # claude/** too, so work-in-progress branches get a real macOS compile
+    # check before any PR exists.
+    branches: [ main, 'claude/**' ]
+    paths:
+      - 'ios/**'
+      - '.github/workflows/build-tvos.yml'
+  pull_request:
+    paths:
+      - 'ios/**'
+      - '.github/workflows/build-tvos.yml'
+  workflow_dispatch:
+    inputs:
+      configuration:
+        description: 'Build configuration'
+        required: false
+        default: 'Release'
+        type: choice
+        options: [ Release, Debug ]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    name: Build & export tvOS app
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          XCODE=$(ls /Applications | grep '^Xcode' | sort -rV | head -1)
+          sudo xcode-select -s "/Applications/$XCODE/Contents/Developer"
+
+      - name: Print Xcode version and SDKs
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i tvos || true
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Build configuration
+        id: config
+        run: |
+          CONFIG="${{ github.event.inputs.configuration || 'Release' }}"
+          echo "configuration=$CONFIG" >> "$GITHUB_OUTPUT"
+
+      # Compile check against the simulator SDK first: fast, and prints every
+      # compiler error instead of stopping at the archive's first failure.
+      - name: Build for tvOS Simulator (compile check)
+        working-directory: ios
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -project ImageGallery.xcodeproj \
+            -scheme NyxframeTV \
+            -configuration Debug \
+            -destination "generic/platform=tvOS Simulator" \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee /tmp/xcodebuild-tvos-sim.log | grep -E "error:|warning: .*deprecated|BUILD (SUCCEEDED|FAILED)" | head -80 || true
+          if grep -q "error:" /tmp/xcodebuild-tvos-sim.log || ! grep -q "BUILD SUCCEEDED" /tmp/xcodebuild-tvos-sim.log; then
+            echo "--- Compiler errors ---"
+            grep -B2 -A4 "error:" /tmp/xcodebuild-tvos-sim.log | head -200
+            exit 1
+          fi
+
+      # The tvOS target shares most of its sources with the iOS app, so any
+      # change made for the TV also has to keep compiling for iPhone.
+      - name: Build iOS app for Simulator (shared-source compile check)
+        working-directory: ios
+        run: |
+          xcodebuild build \
+            -project ImageGallery.xcodeproj \
+            -scheme ImageGallery \
+            -configuration Debug \
+            -destination "generic/platform=iOS Simulator" \
+            CODE_SIGNING_ALLOWED=NO \
+            > /tmp/xcodebuild-ios-sim.log 2>&1 || true
+          if grep -q "error:" /tmp/xcodebuild-ios-sim.log || ! grep -q "BUILD SUCCEEDED" /tmp/xcodebuild-ios-sim.log; then
+            echo "--- iOS compiler errors ---"
+            grep -B2 -A4 "error:" /tmp/xcodebuild-ios-sim.log | head -200
+            tail -30 /tmp/xcodebuild-ios-sim.log
+            exit 1
+          fi
+          echo "iOS build succeeded"
+
+      - name: Archive for Apple TV (unsigned)
+        working-directory: ios
+        run: |
+          mkdir -p build
+          xcodebuild archive \
+            -project ImageGallery.xcodeproj \
+            -scheme NyxframeTV \
+            -configuration ${{ steps.config.outputs.configuration }} \
+            -destination "generic/platform=tvOS" \
+            -archivePath build/NyxframeTV.xcarchive \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            SKIP_INSTALL=NO 2>&1 | tee /tmp/xcodebuild-tvos.log | tail -20
+          if grep -q "error:" /tmp/xcodebuild-tvos.log; then
+            echo "--- Compiler errors ---"
+            grep "error:" /tmp/xcodebuild-tvos.log | head -40
+            exit 1
+          fi
+          APP=$(find build/NyxframeTV.xcarchive -name "*.app" | head -1)
+          if [ -z "$APP" ]; then
+            echo "::error::Archive did not produce a .app bundle"
+            exit 1
+          fi
+          echo "APP_PATH=$APP" >> "$GITHUB_ENV"
+          echo "Assets.car: $(du -sh "$APP/Assets.car" 2>/dev/null || echo MISSING)"
+
+      # Same unsigned-IPA packaging as the iOS build, so the result can be
+      # signed and sideloaded onto an Apple TV (e.g. with Sideloadly or
+      # Xcode's Devices window).
+      - name: Package IPA (unsigned)
+        working-directory: ios
+        run: |
+          MARKETING_VERSION=$(grep 'MARKETING_VERSION' project.yml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          IPA_NAME="NyxframeTV-v${MARKETING_VERSION}-unsigned.ipa"
+          mkdir -p build/Payload/Payload
+          cp -R "$APP_PATH" build/Payload/Payload/
+          cd build/Payload
+          zip -qr "../$IPA_NAME" Payload/ -x "*.DS_Store"
+          echo "IPA created: $(du -sh ../$IPA_NAME)"
+          echo "IPA_NAME=$IPA_NAME" >> "$GITHUB_ENV"
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: NyxframeTV-unsigned-ipa
+          path: ios/build/${{ env.IPA_NAME }}
+          retention-days: 14
+
+      - name: Upload archive (for re-signing)
+        uses: actions/upload-artifact@v4
+        with:
+          name: NyxframeTV-xcarchive
+          path: ios/build/NyxframeTV.xcarchive
+          retention-days: 7

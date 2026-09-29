@@ -4,6 +4,7 @@ options:
   bundleIdPrefix: com.imagegallery
   deploymentTarget:
     iOS: "16.0"
+    tvOS: "17.0"
 
 configs:
   Debug: debug
@@ -73,3 +74,53 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.imagegallery.ios.tests
         GENERATE_INFOPLIST_FILE: "YES"
         INFOPLIST_FILE: ""
+
+  # Apple TV port. Shares the platform-neutral layers with the iOS app --
+  # models, the API client, session/auth, caching, the social view models
+  # and the video playback controller -- and adds its own focus-driven UI
+  # and 24/7 background music under NyxframeTV/. The excluded files are
+  # iOS-only by nature (uploading from the photo library, Face ID lock,
+  # home-screen quick actions, the ducking music service the TV replaces).
+  NyxframeTV:
+    type: application
+    platform: tvOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: ImageGallery/Sources/Models
+      - path: ImageGallery/Sources/Utils
+      - path: ImageGallery/Sources/Services
+        excludes:
+          - BackgroundMusicService.swift
+          - BackgroundUploadManager.swift
+          - BiometricLockService.swift
+          - PendingUploadJobStore.swift
+          - QuickActionRouter.swift
+          - UploadRecoveryService.swift
+      - path: ImageGallery/Sources/ViewModels
+        excludes:
+          - UploadViewModel.swift
+          - StudioViewModel.swift
+          - SettingsViewModel.swift
+      - path: ImageGallery/Sources/Views/MediaDetail/VideoPlayerController.swift
+      - path: NyxframeTV/Sources
+    resources:
+      - path: NyxframeTV/Resources/Assets.xcassets
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.imagegallery.tvos
+        PRODUCT_NAME: Nyxframe
+        INFOPLIST_FILE: NyxframeTV/Resources/Info.plist
+        TVOS_DEPLOYMENT_TARGET: "17.0"
+        TARGETED_DEVICE_FAMILY: "3"
+        ASSETCATALOG_COMPILER_APPICON_NAME: "App Icon & Top Shelf Image"
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: ""
+    scheme:
+      buildAction:
+        targets:
+          - NyxframeTV
+      runAction:
+        config: Debug
+      archiveAction:
+        config: Release
