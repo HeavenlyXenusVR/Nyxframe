@@ -134,10 +134,14 @@ export function Avatar({ user, compact = false, large = false }) {
   const src = user?.avatar_url || user?.user_avatar_url;
   const label = initials(user?.display_name || user?.username || "IG");
   const knownPresence = typeof user?.is_online === "boolean";
-  const [failed, setFailed] = useState(false);
+  // Failure is remembered per URL: a new avatar (profile edit, or this
+  // component being reused for a different user) gets a fresh attempt
+  // instead of staying stuck on initials.
+  const [failedSrc, setFailedSrc] = useState("");
+  const failed = Boolean(src) && failedSrc === src;
   return (
     <span className={`avatar ${compact ? "compact" : ""} ${large ? "large" : ""}`}>
-      {src && !failed ? <img src={src} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} /> : label}
+      {src && !failed ? <img src={src} alt="" loading="lazy" decoding="async" onError={() => setFailedSrc(src)} /> : label}
       {knownPresence ? <span className={`presence-dot ${user.is_online ? "online" : "inactive"}`} /> : null}
     </span>
   );
@@ -186,15 +190,15 @@ export function CollectionCover({ collection }) {
 
 export function ResilientImage({ sources = [], fallback = null, diagnostics = null, ...props }) {
   const usableSources = (sources || []).filter(Boolean);
-  const [index, setIndex] = useState(0);
   const externalOnError = props.onError;
   const externalOnLoad = props.onLoad;
-  // Reset to first source whenever the source list changes
+  // The fallback position is tied to the source list it was reached on, so
+  // a new list starts from its first source in the same render -- the old
+  // reset-in-an-effect rendered one frame with the previous index against
+  // the new list (a wrong image, or the fallback flashing) first.
   const sourcesKey = usableSources.join("|");
-  useEffect(() => {
-    setIndex(0);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourcesKey]);
+  const [attempt, setAttempt] = useState({ key: sourcesKey, index: 0 });
+  const index = attempt.key === sourcesKey ? attempt.index : 0;
   if (index >= usableSources.length) return fallback;
   const src = usableSources[index] || "";
   if (!src) return fallback;
@@ -227,7 +231,7 @@ export function ResilientImage({ sources = [], fallback = null, diagnostics = nu
             sources: usableSources,
           });
         }
-        setIndex((current) => current + 1);
+        setAttempt((current) => ({ key: sourcesKey, index: (current.key === sourcesKey ? current.index : 0) + 1 }));
       }}
     />
   );

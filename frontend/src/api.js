@@ -5,6 +5,10 @@ const API_CACHE_STALE_TTL = 5 * 60_000;
 const API_CACHE_VERSION = "v5";
 const API_CACHE_STORE_PREFIX = "image_gallery_api_cache:";
 const MAX_STORED_CACHE_BYTES = 700_000;
+// Upper bound on in-memory GET cache entries. Every paginated feed page,
+// profile, search and detail view gets its own key, so a long browsing
+// session otherwise grows this map (and the payloads it pins) forever.
+const MAX_MEMORY_CACHE_ENTRIES = 250;
 const REMOTE_ORIGIN_KEY = "image_gallery_remote_origin";
 const REMOTE_ORIGIN_TTL = 20_000;
 const REMOTE_ORIGIN_STALE_TTL = 3 * 60_000;
@@ -116,7 +120,7 @@ export function clearApiCache(prefix = "") {
   for (const key of Array.from(memoryCache.keys())) {
     if (!prefix || key.includes(`|${prefix}`)) memoryCache.delete(key);
   }
-  for (const storage of [safeStorage(sessionStorage), safeStorage(localStorage)]) {
+  for (const storage of [safeStorage(browserStorage("session")), safeStorage(browserStorage("local"))]) {
     if (!storage) continue;
     for (let index = storage.length - 1; index >= 0; index -= 1) {
       const key = storage.key(index);
@@ -144,7 +148,10 @@ export async function apiFetch(path, options = {}) {
   try {
     response = await fetchWithRemoteRetry(path, options, headers);
   } catch (error) {
-    if (error?.name === "AbortError") throw new Error("Request timed out. Please try again.");
+    if (error?.name === "AbortError") {
+      if (callerAborted(options)) throw error;
+      throw new Error("Request timed out. Please try again.");
+    }
     throw error;
   }
   const contentType = response.headers.get("content-type") || "";
@@ -220,13 +227,13 @@ export async function cachedApiFetch(path, options = {}) {
   const ttl = options.ttl ?? API_CACHE_TTL;
   const staleTtl = options.staleTtl ?? API_CACHE_STALE_TTL;
   const token = options.token ?? readToken();
-  const storage = options.storage === "local" ? safeStorage(localStorage) : safeStorage(sessionStorage);
+  const storage = options.storage === "local" ? safeStorage(browserStorage("local")) : safeStorage(browserStorage("session"));
   const cacheKey = `${API_CACHE_VERSION}|${path}|${token ? "auth" : "anon"}`;
   const now = Date.now();
 
   const cached = memoryCache.get(cacheKey) || readStoredCache(storage, cacheKey);
   if (cached) {
-    memoryCache.set(cacheKey, cached);
+    rememberInMemory(cacheKey, cached);
     if (cached.expires > now) return cached.value;
     if (cached.staleUntil > now && options.allowStale !== false) {
       // Fire-and-forget background refresh -- the caller already got
@@ -445,6 +452,9 @@ async function fetchWithRemoteRetry(path, options, headers) {
     }
     return response;
   } catch (error) {
+    // The page cancelled this request itself (navigated away, typed a new
+    // query) -- not a network failure, so no offline marking and no retry.
+    if (callerAborted(options)) throw error;
     // Network-level error — mark the backend as offline so the adaptive poller
     // switches to fast mode (5 s), then re-fetch live-config.json to pick up a
     // rotated Cloudflare tunnel URL and retry up to twice with increasing delay.
@@ -649,14 +659,30 @@ function validApiOrigin(value) {
   }
 }
 
+// The timeout always applies, even when the caller brings its own abort
+// signal (it used to be dropped entirely in that case, so a request a page
+// could cancel could also hang forever). Both are merged into one signal.
 async function fetchWithTimeout(url, options = {}, timeoutMs = API_FETCH_TIMEOUT_MS) {
   const controller = new AbortController();
+  const external = options.signal;
+  const forwardAbort = () => controller.abort(external?.reason);
+  if (external) {
+    if (external.aborted) forwardAbort();
+    else external.addEventListener("abort", forwardAbort, { once: true });
+  }
   const timer = window.setTimeout(() => controller.abort(), Math.max(1000, Number(timeoutMs) || API_FETCH_TIMEOUT_MS));
+  // Internal bookkeeping keys never go to fetch().
+  const { __path: _path, timeoutMs: _timeout, token: _token, ttl: _ttl, staleTtl: _staleTtl, storage: _storage, allowStale: _allowStale, ...fetchOptions } = options;
   try {
-    return await fetch(url, { credentials: "include", ...options, signal: options.signal || controller.signal });
+    return await fetch(url, { credentials: "include", ...fetchOptions, signal: controller.signal });
   } finally {
     window.clearTimeout(timer);
+    if (external) external.removeEventListener("abort", forwardAbort);
   }
+}
+
+function callerAborted(options) {
+  return Boolean(options?.signal?.aborted);
 }
 
 function originFromUrl(url) {
@@ -669,7 +695,9 @@ function originFromUrl(url) {
 
 function revalidateCache(cacheKey, path, options, ttl, staleTtl, storage) {
   if (inFlightFetches.has(cacheKey)) return inFlightFetches.get(cacheKey);
-  const promise = apiFetch(path, options)
+  // The promise is shared with every concurrent caller of the same key, so
+  // one caller's abort signal must not cancel it for the others.
+  const promise = apiFetch(path, { ...options, signal: undefined })
     .then((value) => {
       if (ttl > 0) {
         const entry = {
@@ -677,7 +705,7 @@ function revalidateCache(cacheKey, path, options, ttl, staleTtl, storage) {
           expires: Date.now() + ttl,
           staleUntil: Date.now() + ttl + Math.max(0, staleTtl),
         };
-        memoryCache.set(cacheKey, entry);
+        rememberInMemory(cacheKey, entry);
         writeStoredCache(storage, cacheKey, entry);
       }
       return value;
@@ -685,6 +713,18 @@ function revalidateCache(cacheKey, path, options, ttl, staleTtl, storage) {
     .finally(() => inFlightFetches.delete(cacheKey));
   inFlightFetches.set(cacheKey, promise);
   return promise;
+}
+
+// Map insertion order doubles as LRU order: re-inserting on every hit moves
+// the entry to the back, so the front is always the least recently used.
+function rememberInMemory(cacheKey, entry) {
+  memoryCache.delete(cacheKey);
+  memoryCache.set(cacheKey, entry);
+  while (memoryCache.size > MAX_MEMORY_CACHE_ENTRIES) {
+    const oldest = memoryCache.keys().next().value;
+    if (oldest === undefined) break;
+    memoryCache.delete(oldest);
+  }
 }
 
 function readStorageValue(key) {
@@ -696,13 +736,30 @@ function readStorageValue(key) {
 }
 
 
+// Probing storage is a synchronous write+delete against disk-backed
+// storage; cachedApiFetch runs it on every call, so remember the answer per
+// storage object instead of re-probing on every request.
+const storageUsable = new WeakMap();
+// Merely touching window.localStorage throws in some hardened contexts
+// (sandboxed iframes, blocked site data), so resolve it defensively.
+function browserStorage(kind) {
+  try {
+    return kind === "local" ? window.localStorage : window.sessionStorage;
+  } catch (_error) {
+    return null;
+  }
+}
 function safeStorage(storage) {
   try {
+    if (!storage) return null;
+    if (storageUsable.has(storage)) return storageUsable.get(storage) ? storage : null;
     const probe = "__image_gallery_cache_probe__";
     storage.setItem(probe, "1");
     storage.removeItem(probe);
+    storageUsable.set(storage, true);
     return storage;
   } catch (_error) {
+    try { if (storage) storageUsable.set(storage, false); } catch (_ignored) { /* noop */ }
     return null;
   }
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { BadgeCheck, CalendarDays, Images, Link as LinkIcon, MapPin, Settings, Users } from "lucide-react";
 import { cachedApiFetch } from "../api.js";
@@ -9,6 +9,7 @@ import { useLiveRefresh } from "../hooks/useLiveRefresh.js";
 import { formatDate, numberish, safeExternalUrl } from "../utils/format.js";
 import { profileClassName, profileStyle } from "../utils/appearance.js";
 import { mediaImageSources, preloadMediaAssets } from "../utils/media.js";
+import { reconcileValue } from "../utils/reconcile.js";
 
 export function ProfilePage({ ctx }) {
   const { username } = useParams();
@@ -17,7 +18,14 @@ export function ProfilePage({ ctx }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
 
+  // Guards against a slow response for the previous profile landing after
+  // the viewer has already navigated to another one.
+  const usernameRef = useRef(username);
+  usernameRef.current = username;
+
   const loadProfile = useCallback(async ({ background = false } = {}) => {
+    const requested = username;
+    const stale = () => requested !== usernameRef.current;
     if (!background) {
       setLoading(true);
       setError("");
@@ -28,7 +36,8 @@ export function ProfilePage({ ctx }) {
         staleTtl: 30_000,
         allowStale: false,
       });
-      setData(payload);
+      if (stale()) return;
+      setData((current) => reconcileValue(current, payload));
       preloadMediaAssets(payload.media || [], { limit: 6 });
       if (payload.user?.id) {
         const [followers, following, friends] = await Promise.allSettled([
@@ -36,16 +45,17 @@ export function ProfilePage({ ctx }) {
           cachedApiFetch(`/api/users/${payload.user.id}/following`, { ttl: background ? 8_000 : 20_000, staleTtl: 30_000, allowStale: false }),
           cachedApiFetch(`/api/users/${payload.user.id}/friends`, { ttl: background ? 8_000 : 20_000, staleTtl: 30_000, allowStale: false }),
         ]);
-        setSocial({
-          followers: followers.status === "fulfilled" ? followers.value.users || [] : [],
-          following: following.status === "fulfilled" ? following.value.users || [] : [],
-          friends: friends.status === "fulfilled" ? friends.value.friends || [] : [],
-        });
+        if (stale()) return;
+        setSocial((current) => reconcileValue(current, {
+          followers: followers.status === "fulfilled" ? followers.value.users || [] : current.followers,
+          following: following.status === "fulfilled" ? following.value.users || [] : current.following,
+          friends: friends.status === "fulfilled" ? friends.value.friends || [] : current.friends,
+        }));
       }
     } catch (fetchError) {
-      if (!background) setError(fetchError.message);
+      if (!background && !stale()) setError(fetchError.message);
     } finally {
-      if (!background) setLoading(false);
+      if (!background && !stale()) setLoading(false);
     }
   }, [username]);
 

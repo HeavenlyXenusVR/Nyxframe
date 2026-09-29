@@ -1,10 +1,11 @@
-import { memo, useMemo, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useMemo, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Bookmark, Copy, Download, ExternalLink, Film, FolderPlus, Heart, Image as ImageIcon, Link as LinkIcon, Lock, RefreshCw, Save, Trash2 } from "lucide-react";
 import { apiFetch, clearApiCache } from "../api.js";
 import { useMediaActions } from "../hooks/useMediaActions.js";
 import { formatBytes, formatDate, numberish } from "../utils/format.js";
-import { isGifMedia, isPerfLiteRuntime, mediaImageSources, thumbUrl, videoPreviewUrl } from "../utils/media.js";
+import { CARD_IMAGE_WIDTH, CARD_VIDEO_THUMB_WIDTH, isGifMedia, isPerfLiteRuntime, mediaImageSources, thumbUrl, videoPreviewUrl } from "../utils/media.js";
+import { observeViewport } from "../utils/viewport.js";
 import { Avatar, EmptyState, ResilientImage, SkeletonGrid, StatsRow } from "./ui.jsx";
 
 function subcategoryNames(item) {
@@ -14,9 +15,19 @@ function subcategoryNames(item) {
 }
 
 export function MediaGrid({ ctx, items, loading = false, emptyTitle = "No media", onItemUpdated, onOpen, extraClass = "" }) {
+  // Cards get one stable open handler plus their index, instead of a fresh
+  // `() => onOpen(items, index)` closure per card per render -- that new
+  // function identity defeated MediaCard's memo(), so every append, like
+  // or background refresh re-rendered every card in the grid.
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const onOpenRef = useRef(onOpen);
+  onOpenRef.current = onOpen;
+  const hasOpen = Boolean(onOpen);
+  const openAt = useCallback((index) => onOpenRef.current?.(itemsRef.current, index), []);
   if (loading) return <SkeletonGrid count={8} />;
   if (!items?.length) return <EmptyState title={emptyTitle} />;
-  const eagerCount = isPerfLiteRuntime() ? 1 : 4;
+  const eagerCount = isPerfLiteRuntime() ? 2 : 4;
   const densityClass = `media-grid-${ctx.settings.grid_density || "comfortable"}`;
   return (
     <div className={["media-grid", densityClass, extraClass].filter(Boolean).join(" ")}>
@@ -25,18 +36,20 @@ export function MediaGrid({ ctx, items, loading = false, emptyTitle = "No media"
           ctx={ctx}
           item={item}
           key={item.id}
+          index={index}
           eager={index < eagerCount}
           onItemUpdated={onItemUpdated}
-          onOpen={onOpen ? () => onOpen(items, index) : undefined}
+          onOpenAt={hasOpen ? openAt : undefined}
         />
       ))}
     </div>
   );
 }
 
-export const MediaCard = memo(function MediaCard({ ctx, item, eager = false, onItemUpdated, onOpen }) {
+export const MediaCard = memo(function MediaCard({ ctx, item, index = 0, eager = false, onItemUpdated, onOpenAt, onOpen: onOpenProp }) {
+  const onOpen = onOpenAt ? () => onOpenAt(index) : onOpenProp;
   const actions = useMediaActions(ctx, onItemUpdated);
-  const thumb = useMemo(() => (item.media_kind === "video" ? thumbUrl(item, 420) : thumbUrl(item)), [item]);
+  const thumb = useMemo(() => (item.media_kind === "video" ? thumbUrl(item, CARD_VIDEO_THUMB_WIDTH) : thumbUrl(item)), [item]);
   const mutedPreview = ctx.settings.muted_previews !== false;
   // NOT !isPerfLiteRuntime() -- perf-lite auto-activates on ANY coarse-
   // pointer device or a viewport <=820px wide (main.jsx's mobileQuery:
@@ -91,36 +104,32 @@ export const MediaCard = memo(function MediaCard({ ctx, item, eager = false, onI
   useEffect(() => {
     if (!previewEligible) return undefined;
     const node = cardRef.current;
-    if (!node || typeof IntersectionObserver === "undefined") { setInView(true); return undefined; }
+    if (!node) return undefined;
     let settleTimer = null;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry.isIntersecting) {
-          // 150ms, not the original 350 -- long enough to skip a card that
-          // flashes past mid-fling, but 350 turned out to routinely be
-          // longer than a card stays continuously visible during a normal
-          // scroll flick, so previews rarely got the chance to start at
-          // all ("only gifs are actually playing" while scrolling, since
-          // GIFs need no such gate). Tightened on both platforms together.
-          settleTimer = window.setTimeout(() => setInView(true), 150);
-        } else {
-          if (settleTimer) { window.clearTimeout(settleTimer); settleTimer = null; }
-          setInView(false);
-        }
-      },
-      { rootMargin: "200px" },
-    );
-    observer.observe(node);
+    const unsubscribe = observeViewport(node, (entry) => {
+      if (entry.isIntersecting) {
+        // 150ms, not the original 350 -- long enough to skip a card that
+        // flashes past mid-fling, but 350 turned out to routinely be
+        // longer than a card stays continuously visible during a normal
+        // scroll flick, so previews rarely got the chance to start at
+        // all ("only gifs are actually playing" while scrolling, since
+        // GIFs need no such gate). Tightened on both platforms together.
+        if (!settleTimer) settleTimer = window.setTimeout(() => { settleTimer = null; setInView(true); }, 150);
+      } else {
+        if (settleTimer) { window.clearTimeout(settleTimer); settleTimer = null; }
+        setInView(false);
+      }
+    }, { rootMargin: "200px" });
     return () => {
       if (settleTimer) window.clearTimeout(settleTimer);
-      observer.disconnect();
+      unsubscribe();
     };
   }, [previewEligible]);
   const liveVideoPreview = previewEligible && inView;
   const previewSrc = useMemo(() => (liveVideoPreview ? videoPreviewUrl(item, "low") : ""), [liveVideoPreview, item]);
   const categoryLine = useMemo(() => [item.category_name || "Unsorted", ...subcategoryNames(item)].filter(Boolean).join(" / "), [item]);
-  const imageSources = useMemo(() => mediaImageSources(item, { width: eager ? 720 : 640, previewSize: "detail" }), [item, eager]);
-  const videoThumbSources = useMemo(() => mediaImageSources(item, { width: 420, previewSize: "card" }), [item]);
+  const imageSources = useMemo(() => mediaImageSources(item, { width: CARD_IMAGE_WIDTH, previewSize: "detail" }), [item]);
+  const videoThumbSources = useMemo(() => mediaImageSources(item, { width: CARD_VIDEO_THUMB_WIDTH, previewSize: "card" }), [item]);
   return (
     <article ref={cardRef} className={`media-card ${item.locked ? "is-locked" : ""}`}>
       <Link

@@ -1318,7 +1318,11 @@ textarea:focus {
     linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 50%),
     #10171a;
   content-visibility: auto;
-  contain-intrinsic-size: 340px;
+  /* `auto` remembers each card's real rendered height once it has been
+     laid out, so cards scrolled off-screen keep their true size instead of
+     collapsing back to the 340px placeholder -- which shifted everything
+     above the viewport and made the scrollbar jump while scrolling up. */
+  contain-intrinsic-size: auto 340px;
   contain: layout paint style;
   animation: surface-enter var(--motion-slow) both;
   transition: border-color var(--motion-med), box-shadow var(--motion-med), transform var(--motion-med);
@@ -8218,5 +8222,18 @@ select option {
 
   .page-head {
     padding: 12px 14px;
+  }
+}
+
+/* ── Rendering performance ─────────────────────────────────────────────── */
+/* Long lists outside the media grid (Users, Studio) get the same off-screen
+   skipping the media cards already have: the browser doesn't lay out or
+   paint rows that are nowhere near the viewport. `auto` keeps each row's
+   real measured height once seen, so scroll position never jumps. */
+@supports (content-visibility: auto) {
+  .user-grid > .user-card,
+  .studio-item {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 220px;
   }
 }

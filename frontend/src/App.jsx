@@ -1,33 +1,82 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Navigate, Route, Routes, useNavigate } from "react-router-dom";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { apiFetch, cachedApiFetch, clearApiCache, forceRefreshRemoteOrigin, prefetchApi, readStoredUser, readToken, resolveApiUrl, toQuery, writeStoredUser, writeToken } from "./api.js";
 import { Shell } from "./components/Shell.jsx";
 import { BackgroundMusicPlayer } from "./components/BackgroundMusicPlayer.jsx";
-import { Lightbox } from "./components/Lightbox.jsx";
 import { CommandPalette } from "./components/CommandPalette.jsx";
+import { ErrorBoundary } from "./components/ErrorBoundary.jsx";
 import { ScrollManager } from "./components/ScrollManager.jsx";
-import { NotFound } from "./components/ui.jsx";
+import { NotFound, SkeletonGrid } from "./components/ui.jsx";
 import { DEFAULT_SETTINGS, PAGE_SIZE, setRuntimeMaxUploadBytes } from "./config.js";
 import { useLiveRefresh } from "./hooks/useLiveRefresh.js";
 import { galleryClassName, galleryStyle } from "./utils/appearance.js";
-import { AdminPage } from "./pages/AdminPage.jsx";
-import { AuthPage } from "./pages/AuthPage.jsx";
-import { CategoryPage } from "./pages/CategoryPage.jsx";
-import { CollectionsPage } from "./pages/CollectionsPage.jsx";
+import { reconcileValue } from "./utils/reconcile.js";
+// The home page ships in the main bundle so the first paint never waits on
+// a second request; every other route (and the lightbox, which pulls in the
+// whole video player + hls.js) is split into its own chunk and fetched the
+// first time it's needed.
 import { DiscoverPage } from "./pages/DiscoverPage.jsx";
-import { FeedPage } from "./pages/FeedPage.jsx";
-import { FriendsPage } from "./pages/FriendsPage.jsx";
-import { MediaDetailPage } from "./pages/MediaDetailPage.jsx";
-import { MessagesPage } from "./pages/MessagesPage.jsx";
-import { OtherProjectsPage } from "./pages/OtherProjectsPage.jsx";
-import { ProfilePage } from "./pages/ProfilePage.jsx";
-import { SearchPage } from "./pages/SearchPage.jsx";
-import { SettingsPage } from "./pages/SettingsPage.jsx";
-import { SimilarMediaPage } from "./pages/SimilarMediaPage.jsx";
-import { StudioPage } from "./pages/StudioPage.jsx";
-import { TrendingPage } from "./pages/TrendingPage.jsx";
-import { UploadPage } from "./pages/UploadPage.jsx";
-import { UsersPage } from "./pages/UsersPage.jsx";
+
+// Named exports -> default-export shape React.lazy expects. A failed chunk
+// load (a deploy replaced the hashed files under an open tab) reloads the
+// page once to pick up the new build instead of leaving a dead route.
+function lazyPage(loader, name) {
+  return lazy(() => loader().then(
+    (module) => ({ default: module[name] }),
+    (error) => {
+      const flag = "nyxframe_chunk_reload";
+      try {
+        if (!sessionStorage.getItem(flag)) {
+          sessionStorage.setItem(flag, "1");
+          window.location.reload();
+          return new Promise(() => {});
+        }
+        sessionStorage.removeItem(flag);
+      } catch (_storageError) {
+        // Storage unavailable -- fall through to the error boundary.
+      }
+      throw error;
+    },
+  ));
+}
+
+const AdminPage = lazyPage(() => import("./pages/AdminPage.jsx"), "AdminPage");
+const AuthPage = lazyPage(() => import("./pages/AuthPage.jsx"), "AuthPage");
+const CategoryPage = lazyPage(() => import("./pages/CategoryPage.jsx"), "CategoryPage");
+const CollectionsPage = lazyPage(() => import("./pages/CollectionsPage.jsx"), "CollectionsPage");
+const FeedPage = lazyPage(() => import("./pages/FeedPage.jsx"), "FeedPage");
+const FriendsPage = lazyPage(() => import("./pages/FriendsPage.jsx"), "FriendsPage");
+const MediaDetailPage = lazyPage(() => import("./pages/MediaDetailPage.jsx"), "MediaDetailPage");
+const MessagesPage = lazyPage(() => import("./pages/MessagesPage.jsx"), "MessagesPage");
+const OtherProjectsPage = lazyPage(() => import("./pages/OtherProjectsPage.jsx"), "OtherProjectsPage");
+const ProfilePage = lazyPage(() => import("./pages/ProfilePage.jsx"), "ProfilePage");
+const SearchPage = lazyPage(() => import("./pages/SearchPage.jsx"), "SearchPage");
+const SettingsPage = lazyPage(() => import("./pages/SettingsPage.jsx"), "SettingsPage");
+const SimilarMediaPage = lazyPage(() => import("./pages/SimilarMediaPage.jsx"), "SimilarMediaPage");
+const StudioPage = lazyPage(() => import("./pages/StudioPage.jsx"), "StudioPage");
+const TrendingPage = lazyPage(() => import("./pages/TrendingPage.jsx"), "TrendingPage");
+const UploadPage = lazyPage(() => import("./pages/UploadPage.jsx"), "UploadPage");
+const UsersPage = lazyPage(() => import("./pages/UsersPage.jsx"), "UsersPage");
+const Lightbox = lazyPage(() => import("./components/Lightbox.jsx"), "Lightbox");
+
+// Warm the chunks people are most likely to open next once the app is idle,
+// so the first click into a post or a feed doesn't wait on a download.
+function prefetchLikelyRoutes() {
+  const run = () => {
+    import("./pages/MediaDetailPage.jsx").catch(() => {});
+    import("./components/Lightbox.jsx").catch(() => {});
+    import("./pages/TrendingPage.jsx").catch(() => {});
+    import("./pages/ProfilePage.jsx").catch(() => {});
+  };
+  if (typeof window === "undefined") return;
+  if (navigator.connection?.saveData) return;
+  if ("requestIdleCallback" in window) window.requestIdleCallback(run, { timeout: 4000 });
+  else window.setTimeout(run, 2500);
+}
+
+function RouteFallback() {
+  return <div className="page"><SkeletonGrid count={8} /></div>;
+}
 
 const BOOT_TIPS = [
   "Video thumbnails are pre-warmed in the background so gallery cards do not wait on first open.",
@@ -73,6 +122,7 @@ const QUICK_THEME_CYCLE = { "": "dark", "dark": "light", "light": "" };
 
 function App() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [token, setTokenState] = useState(() => readToken());
   const [user, setUserState] = useState(() => readStoredUser());
   const [lookups, setLookups] = useState({ categories: [], tags: [], live: null });
@@ -107,8 +157,13 @@ function App() {
     });
   }, []);
 
+  // The /api/me poll (every 45s) and the lookups poll (every 30s) almost
+  // always return exactly what's already in state. Handing React a fresh
+  // object anyway rebuilt `ctx`, which every page and every memoized
+  // MediaCard receives -- i.e. the entire visible app re-rendered twice a
+  // minute for no change at all. Keep the old identity when nothing moved.
   const setSessionUser = useCallback((nextUser) => {
-    setUserState(nextUser);
+    setUserState((current) => reconcileValue(current, nextUser ?? null));
     writeStoredUser(nextUser);
   }, []);
 
@@ -136,10 +191,23 @@ function App() {
       // remote-origin cache to expire so the very next API request re-reads
       // live-config.json and picks up the rotated tunnel URL immediately.
       if (live.status === "rejected") forceRefreshRemoteOrigin();
-      setLookups({
-        categories: categories.status === "fulfilled" ? categories.value.categories || [] : [],
-        tags: tags.status === "fulfilled" ? tags.value.tags || [] : [],
-        live: live.status === "fulfilled" ? live.value : null,
+      setLookups((current) => {
+        // A failed refresh keeps the last good categories/tags rather than
+        // blanking every category pill and filter until the next poll.
+        const next = {
+          categories: categories.status === "fulfilled" ? categories.value.categories || [] : current.categories,
+          tags: tags.status === "fulfilled" ? tags.value.tags || [] : current.tags,
+          // server_time ticks on every response; nothing reads it, and
+          // keeping it would make every health poll look like a change.
+          live: live.status === "fulfilled" && live.value ? { ...live.value, server_time: undefined } : null,
+        };
+        const merged = {
+          categories: reconcileValue(current.categories, next.categories),
+          tags: reconcileValue(current.tags, next.tags),
+          live: reconcileValue(current.live, next.live),
+        };
+        const unchanged = merged.categories === current.categories && merged.tags === current.tags && merged.live === current.live;
+        return unchanged ? current : merged;
       });
     } finally {
       setLookupsReady(true);
@@ -198,6 +266,7 @@ function App() {
   useEffect(() => {
     refreshMe();
     refreshLookups();
+    prefetchLikelyRoutes();
   }, [refreshMe, refreshLookups]);
 
   useLiveRefresh(refreshLookups, { interval: 30_000 });
@@ -326,7 +395,9 @@ function App() {
     const discoverQuery = toQuery({ limit: pageSize + 1, offset: 0, adult: "show", sort });
 
     const finishBoot = async () => {
-      const remaining = Math.max(0, 1500 - (Date.now() - startedAt));
+      // A short floor keeps the overlay from flashing on a warm cache; it
+      // used to be 1.5s, which was pure added wait on every cold start.
+      const remaining = Math.max(0, 600 - (Date.now() - startedAt));
       if (remaining) {
         await new Promise((resolve) => window.setTimeout(resolve, remaining));
       }
@@ -405,13 +476,12 @@ function App() {
     refreshLookups,
     setSessionUser,
     showToast,
-    lightbox,
     openLightbox,
     closeLightbox,
     quickTheme,
     cycleTheme,
     openCommandPalette,
-  }), [closeLightbox, cycleTheme, effectiveSettings, lightbox, loginWith, logout, lookups, openCommandPalette, openLightbox, quickTheme, refreshLookups, refreshMe, setSessionUser, showToast, token, user]);
+  }), [closeLightbox, cycleTheme, effectiveSettings, loginWith, logout, lookups, openCommandPalette, openLightbox, quickTheme, refreshLookups, refreshMe, setSessionUser, showToast, token, user]);
 
   return (
     <Shell ctx={ctx} className={galleryClassName(ctx.settings)} style={galleryStyle(ctx.settings)}>
@@ -425,6 +495,8 @@ function App() {
       {effectiveSettings.custom_css ? <style>{effectiveSettings.custom_css.slice(0, 4000)}</style> : null}
       <ScrollManager />
       <CommandPalette ctx={ctx} open={paletteOpen} onClose={closeCommandPalette} />
+      <ErrorBoundary resetKey={location.pathname}>
+      <Suspense fallback={<RouteFallback />}>
       <Routes>
         <Route path="/" element={<DiscoverPage ctx={ctx} />} />
         <Route path="/trending" element={<TrendingPage ctx={ctx} />} />
@@ -448,6 +520,8 @@ function App() {
         <Route path="/login" element={<AuthPage ctx={ctx} />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
+      </Suspense>
+      </ErrorBoundary>
       <BackgroundMusicPlayer />
       {!bootDismissed ? (
         <GalleryBootOverlay
@@ -457,7 +531,13 @@ function App() {
           tip={BOOT_TIPS[bootTipIndex]}
         />
       ) : null}
-      {lightbox ? <Lightbox ctx={ctx} /> : null}
+      {lightbox ? (
+        <ErrorBoundary resetKey={lightbox} fallback={null} onError={closeLightbox}>
+          <Suspense fallback={null}>
+            <Lightbox ctx={ctx} lightbox={lightbox} />
+          </Suspense>
+        </ErrorBoundary>
+      ) : null}
       {toast ? (
         <div className={`toast toast-${toast.kind}`} role="status" aria-live="polite">
           <span className="toast-message">{toast.message}</span>

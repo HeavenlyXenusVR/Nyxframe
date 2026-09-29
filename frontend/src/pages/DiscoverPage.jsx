@@ -149,6 +149,14 @@ export function DiscoverPage({ ctx }) {
   const filtersRef = useRef(filters);
   filtersRef.current = filters;
   const sentinelRef = useRef(null);
+  // Bumped on every fresh (page 1) load. A response that comes back after
+  // the filters changed again belongs to a query nobody is looking at any
+  // more -- without this guard, a slow earlier search could land last and
+  // overwrite the results of the newer one, or append its page onto them.
+  const generationRef = useRef(0);
+  // Set when loading the next page fails; stops the scroll sentinel from
+  // re-firing the same failing request in a loop until the viewer retries.
+  const [moreError, setMoreError] = useState("");
 
   const pageSize = pageSizeFor(ctx.settings);
 
@@ -177,10 +185,14 @@ export function DiscoverPage({ ctx }) {
       offset: (page - 1) * pageSize,
     };
     const path = `/api/media${toQuery(queryParams)}`;
+    const generation = append ? generationRef.current : ++generationRef.current;
+    const isCurrent = () => generation === generationRef.current;
+    if (append) setMoreError("");
     try {
       const data = append
         ? await apiFetch(path)
         : await cachedApiFetch(path, { ttl: 20_000, staleTtl: 5 * 60_000, storage: "session" });
+      if (!isCurrent()) return;
       const rows = data.media || [];
       const pageItems = rows.slice(0, pageSize);
       if (append) {
@@ -191,9 +203,15 @@ export function DiscoverPage({ ctx }) {
       setHasNext(rows.length > pageSize);
       preloadMediaAssets(rows, { limit: 6 });
     } catch (err) {
+      if (!isCurrent()) return;
       if (!append) { setError(err.message); setItems([]); setHasNext(false); }
+      else {
+        // Roll the page counter back so a retry asks for the same page.
+        pageRef.current = Math.max(1, page - 1);
+        setMoreError(err.message || "Could not load more posts.");
+      }
     } finally {
-      if (!append) setLoading(false);
+      if (!append) { if (isCurrent()) setLoading(false); }
       else setLoadingMore(false);
     }
   }, [pageSize]);
@@ -205,6 +223,7 @@ export function DiscoverPage({ ctx }) {
     const timer = window.setTimeout(() => {
       pageRef.current = 1;
       setHasNext(false);
+      setMoreError("");
       setError("");
       setItems([]);
       loadMedia({ page: 1, append: false });
@@ -249,7 +268,7 @@ export function DiscoverPage({ ctx }) {
     if (!sentinel) return;
     const observer = new IntersectionObserver(
       ([entry]) => {
-        if (entry.isIntersecting && hasNext && !loadingMore && !loading) {
+        if (entry.isIntersecting && hasNext && !loadingMore && !loading && !moreError) {
           const nextPage = pageRef.current + 1;
           pageRef.current = nextPage;
           setLoadingMore(true);
@@ -260,7 +279,7 @@ export function DiscoverPage({ ctx }) {
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [hasNext, loadingMore, loading, loadMedia]);
+  }, [hasNext, loadingMore, loading, loadMedia, moreError]);
 
   function updateFilter(key, value) {
     setFilters((current) => ({
@@ -297,6 +316,7 @@ export function DiscoverPage({ ctx }) {
 
   function refreshFeed() {
     pageRef.current = 1;
+    setMoreError("");
     setItems([]);
     setHasNext(false);
     setLoadingMore(false);
@@ -609,6 +629,7 @@ export function DiscoverPage({ ctx }) {
               restored scroll position that lands past it); this always
               works, and pressing it is also how a screen-reader user
               gets to page two at all. */}
+          {moreError && !loadingMore ? <Notice kind="error">{moreError}</Notice> : null}
           {hasNext && !loadingMore && !loading ? (
             <div className="load-more-row">
               <button
@@ -620,7 +641,7 @@ export function DiscoverPage({ ctx }) {
                   loadMedia({ page: nextPage, append: true });
                 }}
               >
-                Load more
+                {moreError ? "Try again" : "Load more"}
               </button>
             </div>
           ) : null}

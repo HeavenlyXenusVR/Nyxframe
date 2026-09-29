@@ -8,6 +8,13 @@ const MAX_SEEN_PRELOADS = 700;
 const reportedMediaDiagnostics = new Set();
 const MAX_SEEN_DIAGNOSTICS = 800;
 
+// Widths the grid cards request. Shared with preloadMediaAssets so a
+// preload warms the exact URL the card will ask for -- they used to differ
+// (preload 360/640 vs card 640/720), so every preload was a wasted
+// download followed by a second fetch of a different size.
+export const CARD_IMAGE_WIDTH = 640;
+export const CARD_VIDEO_THUMB_WIDTH = 420;
+
 export function isPerfLiteRuntime() {
   if (typeof document === "undefined") return false;
   return document.documentElement.classList.contains("perf-lite");
@@ -261,11 +268,17 @@ export function replaceMedia(rows, updated) {
 
 export function preloadMediaAssets(items, options = {}) {
   if (typeof Image === "undefined") return;
+  // Respect a viewer who asked the browser to save data.
+  if (typeof navigator !== "undefined" && navigator.connection?.saveData) return;
   const perfLite = isPerfLiteRuntime();
   const limit = Math.max(0, Math.min(Number(options.limit || (perfLite ? 2 : 6)), perfLite ? 3 : 12));
   for (const item of (items || []).slice(0, limit)) {
-    if (item?.media_kind === "video") continue;
-    const src = thumbUrl(item, options.width || defaultThumbWidth());
+    // GIF "thumbnails" are the full animated file -- far too heavy to fetch
+    // speculatively.
+    if (!item || item.locked || isGifMedia(item)) continue;
+    const src = item.media_kind === "video"
+      ? mediaImageSources(item, { width: CARD_VIDEO_THUMB_WIDTH, previewSize: "card" })[0]
+      : mediaImageSources(item, { width: options.width || CARD_IMAGE_WIDTH, previewSize: "detail" })[0];
     if (!src || preloadedMedia.has(src)) continue;
     preloadedMedia.add(src);
     preloadQueue.push(src);
@@ -276,5 +289,8 @@ export function preloadMediaAssets(items, options = {}) {
       if (preloadedMedia.size <= Math.floor(MAX_SEEN_PRELOADS * 0.7)) break;
     }
   }
+  // Drop anything still queued past a sane depth (fast infinite scroll can
+  // enqueue faster than two-at-a-time preloading drains).
+  if (preloadQueue.length > 24) preloadQueue.splice(0, preloadQueue.length - 24);
   scheduleIdle(pumpPreloadQueue);
 }

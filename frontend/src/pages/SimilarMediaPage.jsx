@@ -35,6 +35,9 @@ export function SimilarMediaPage({ ctx }) {
       setHasNext(rows.length > PAGE_SIZE);
     } catch (err) {
       if (!append) { setError(err.message); setItems([]); setHasNext(false); }
+      // A failed next page stops the sentinel; otherwise it re-fires the
+      // same failing request in a tight loop while it stays on screen.
+      else { pageRef.current = Math.max(1, page - 1); setHasNext(false); }
     } finally {
       if (!append) setLoading(false);
       else setLoadingMore(false);
