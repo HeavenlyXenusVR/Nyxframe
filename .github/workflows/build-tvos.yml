@@ -120,7 +120,14 @@ jobs:
             exit 1
           fi
           echo "APP_PATH=$APP" >> "$GITHUB_ENV"
-          echo "Assets.car: $(du -sh "$APP/Assets.car" 2>/dev/null || echo MISSING)"
+          # The layered app icon and Top Shelf images live in Assets.car;
+          # an app without it shows a blank icon on the Apple TV home screen.
+          if [ ! -f "$APP/Assets.car" ]; then
+            echo "::error::Assets.car is missing -- the asset catalog was not compiled into the app"
+            exit 1
+          fi
+          echo "Assets.car: $(du -sh "$APP/Assets.car")"
+          grep -iE "actool|\.xcassets.*(warning|error)" /tmp/xcodebuild-tvos.log | grep -iE "warning|error" | head -20 || true
 
       # Same unsigned-IPA packaging as the iOS build, so the result can be
       # signed and sideloaded onto an Apple TV (e.g. with Sideloadly or

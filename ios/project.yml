@@ -103,7 +103,9 @@ targets:
           - SettingsViewModel.swift
       - path: ImageGallery/Sources/Views/MediaDetail/VideoPlayerController.swift
       - path: NyxframeTV/Sources
-    resources:
+      # Listed under sources (XcodeGen has no separate `resources` key; it
+      # files .xcassets into the Copy Bundle Resources phase by type), so
+      # actool compiles the layered icon and Top Shelf into Assets.car.
       - path: NyxframeTV/Resources/Assets.xcassets
     settings:
       base:
