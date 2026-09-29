@@ -2631,10 +2631,16 @@ local function parse_tags(value)
   return tags
 end
 
+-- Matched as whole words (see moderate_upload), not as substrings. The
+-- derived forms below used to be caught for free by substring matching
+-- ("sexy" via "sex") and are listed explicitly so that tightening the match
+-- does not quietly weaken detection.
 local ADULT_KEYWORDS = {
   "18plus", "18+", "adult", "nsfw", "not safe for work", "nude", "nudity",
   "explicit", "porn", "porno", "sex", "sexual", "hentai", "ecchi", "lewd",
   "erotic", "fetish", "onlyfans", "camgirl", "cam boy", "xxx",
+  "sexy", "sexually", "nudes", "pornographic", "pornhub", "erotica",
+  "fetishes", "lewds", "hardcore", "xrated",
 }
 
 -- Mirrors app/routers/media.py's _moderate_upload(). human_confirmed is
@@ -2643,9 +2649,27 @@ local ADULT_KEYWORDS = {
 -- adult content the uploader themselves didn't check the box for.
 local function moderate_upload(title, description, tags, filename, mime_type, user_marked_adult)
   local combined = table.concat({ title, description or "", table.concat(tags, " "), filename, mime_type }, " "):lower()
+  -- Whole-word matching. This used to be a plain substring search, which
+  -- gated any post whose text merely CONTAINED a keyword's letters: the
+  -- Derpibooru tag "adorasexy" (a safe-rated tag) contains "sex", so ordinary
+  -- pony wallpapers were being hidden behind the age gate. "unisex",
+  -- "asexual" and "Essex" had the same problem.
+  --
+  -- Tags arrive slug-cased ("equestria-girls"), so punctuation is collapsed
+  -- to spaces before matching and the haystack is padded, making " word " a
+  -- boundary test. Keywords that are not purely alphanumeric ("18+",
+  -- "cam boy", "not safe for work") would not survive that normalisation, so
+  -- they keep the original substring behaviour.
+  local normalized = " " .. combined:gsub("[^%w]+", " ") .. " "
   local hits = {}
   for _, word in ipairs(ADULT_KEYWORDS) do
-    if combined:find(word, 1, true) then hits[#hits + 1] = word end
+    local matched
+    if word:find("[^%w]") then
+      matched = combined:find(word, 1, true) ~= nil
+    else
+      matched = normalized:find(" " .. word .. " ", 1, true) ~= nil
+    end
+    if matched then hits[#hits + 1] = word end
   end
   local adult_by_ai = #hits > 0
   local is_adult = user_marked_adult or adult_by_ai
