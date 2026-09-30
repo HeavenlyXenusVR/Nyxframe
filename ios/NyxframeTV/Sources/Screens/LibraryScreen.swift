@@ -92,9 +92,10 @@ struct LibraryScreen: View {
     private func collectionRow(_ title: String, _ rows: [CollectionSummary]) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             Text(title).font(.title3.bold())
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 340, maximum: 340), spacing: 48)], alignment: .leading, spacing: 48) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: TVTheme.gridSpacing, alignment: .top), count: TVTheme.gridColumns),
+                      alignment: .leading, spacing: TVTheme.gridSpacing) {
                 ForEach(rows) { collection in
-                    TVCollectionCard(collection: collection) { navigator.push(.collection(collection.id)) }
+                    TVCollectionCard(collection: collection, width: nil) { navigator.push(.collection(collection.id)) }
                 }
             }
         }

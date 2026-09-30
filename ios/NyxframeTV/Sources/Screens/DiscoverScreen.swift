@@ -16,6 +16,10 @@ struct DiscoverScreen: View {
         ("views", "Most viewed"), ("downloads", "Most downloaded"), ("old", "Oldest"),
     ]
     private static let kinds: [(String?, String)] = [(nil, "All"), ("image", "Images"), ("video", "Videos")]
+    /// The web app's 18+ filter ("18+ posts" in Discover's filter panel).
+    private static let adultModes: [(String, String)] = [("show", "Show 18+"), ("hide", "Hide 18+"), ("only", "Only 18+")]
+    /// Remembered on this TV, like the web app keeps it for the session.
+    @AppStorage("nyxframe_tv_adult_filter") private var adultMode = "show"
 
     var body: some View {
         ScrollView {
@@ -34,6 +38,7 @@ struct DiscoverScreen: View {
         .task {
             guard !loadedOnce else { return }
             loadedOnce = true
+            feed.adult = adultMode == "show" ? nil : adultMode
             if let sort = session.currentUser?.userSettings?.defaultSort, !sort.isEmpty { feed.sort = sort }
             Task { await loadLookups() }
             await feed.loadInitial()
@@ -86,10 +91,21 @@ struct DiscoverScreen: View {
                 .padding(.vertical, 12)
             }
             .scrollClipDisabled()
+            // Scrolls sideways instead of squeezing: media type, 18+ and
+            // sort together are wider than the screen at TV text sizes.
+            ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 16) {
                 ForEach(Self.kinds, id: \.1) { kind in
                     TVPill(title: kind.1, isSelected: feed.mediaKind == kind.0) {
                         feed.mediaKind = kind.0
+                        reload()
+                    }
+                }
+                Divider().frame(height: 40).padding(.horizontal, 12)
+                ForEach(Self.adultModes, id: \.0) { mode in
+                    TVPill(title: mode.1, isSelected: adultMode == mode.0) {
+                        adultMode = mode.0
+                        feed.adult = mode.0 == "show" ? nil : mode.0
                         reload()
                     }
                 }
@@ -106,6 +122,17 @@ struct DiscoverScreen: View {
                 } label: {
                     Label("Sort: \(Self.sorts.first { $0.0 == feed.sort }?.1 ?? "Newest")", systemImage: "arrow.up.arrow.down")
                 }
+            }
+            .padding(.vertical, 12)
+            }
+            .scrollClipDisabled()
+            if adultMode == "only", session.currentUser?.ageVerifiedAt == nil {
+                Label(session.currentUser == nil
+                      ? "18+ posts stay locked until you sign in with an age-verified account."
+                      : "18+ posts stay locked until your age is verified on the Nyxframe website.",
+                      systemImage: "lock")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
         }
         .focusSection()

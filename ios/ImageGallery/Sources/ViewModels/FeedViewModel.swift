@@ -12,6 +12,9 @@ final class FeedViewModel: ObservableObject {
     @Published var sort = "new"
     @Published var categoryId: Int?
     @Published var subcategoryId: Int?
+    /// 18+ filter, same values as the web app's: "show" (default when
+    /// nil), "hide", or "only".
+    @Published var adult: String?
 
     private let api = GalleryAPIClient.shared
     private var offset = 0
@@ -32,7 +35,7 @@ final class FeedViewModel: ObservableObject {
         errorMessage = nil
         defer { isLoading = false }
         do {
-            let fetched = try await api.listMedia(mediaKind: mediaKind, categoryId: categoryId, subcategoryId: subcategoryId, query: query, sort: sort, limit: pageSize, offset: 0)
+            let fetched = try await api.listMedia(mediaKind: mediaKind, categoryId: categoryId, subcategoryId: subcategoryId, query: query, sort: sort, adult: adult, limit: pageSize, offset: 0)
             guard requestGeneration == generation else { return }
             items = fetched
             offset = fetched.count
@@ -52,7 +55,7 @@ final class FeedViewModel: ObservableObject {
         isLoadingMore = true
         defer { isLoadingMore = false }
         do {
-            let next = try await api.listMedia(mediaKind: mediaKind, categoryId: categoryId, subcategoryId: subcategoryId, query: query, sort: sort, limit: pageSize, offset: requestOffset)
+            let next = try await api.listMedia(mediaKind: mediaKind, categoryId: categoryId, subcategoryId: subcategoryId, query: query, sort: sort, adult: adult, limit: pageSize, offset: requestOffset)
             guard requestGeneration == generation else { return }
             items.append(contentsOf: next)
             offset += next.count
