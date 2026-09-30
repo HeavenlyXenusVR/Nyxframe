@@ -4,6 +4,15 @@ on:
   push:
     tags:
       - 'ios/v*'
+  # Manual release from the Actions tab (or the API) without pushing a tag
+  # first: the release step creates the ios/v<version> tag on the commit
+  # being built.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release, e.g. 1.34.0 (creates tag ios/v<version>)'
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -26,8 +35,22 @@ jobs:
       - name: Extract version from tag
         id: version
         run: |
-          TAG="${{ github.ref_name }}"
-          VERSION="${TAG#ios/v}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+            VERSION="${VERSION#v}"
+            TAG="ios/v$VERSION"
+            if ! echo "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+              echo "::error::Version must look like 1.34.0 (got '$VERSION')"
+              exit 1
+            fi
+            if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+              echo "::error::Tag $TAG already exists -- pick a new version"
+              exit 1
+            fi
+          else
+            TAG="${{ github.ref_name }}"
+            VERSION="${TAG#ios/v}"
+          fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "Releasing Nyxframe iOS version: $VERSION (tag: $TAG)"
@@ -315,7 +338,10 @@ jobs:
             ASSETS+=("ios/build/$TV_IPA")
             TV_NOTE=$(printf '\n\n**Apple TV:** `%s` is the tvOS app (tvOS 17+). It is unsigned -- sign and install it on your Apple TV with [Sideloadly](https://sideloadly.io/) or Xcode (Window > Devices and Simulators).' "$TV_IPA")
           fi
+          # --target only matters for a manual run, where the tag doesn't
+          # exist yet: it's created on exactly the commit that was built.
           gh release create "$TAG" \
+            --target "${{ github.sha }}" \
             --title "Nyxframe iOS v${VERSION}" \
             --notes "$(printf '## Nyxframe iOS v%s\n\n**Installation:** %s\n\n**AltStore users:** Add the source URL from Settings to get automatic updates.%s' "$VERSION" "$INSTALL_NOTE" "$TV_NOTE")" \
             "${ASSETS[@]}"
