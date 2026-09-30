@@ -260,7 +260,18 @@ export function CollectionSaveControl({ ctx, media, compact = false, openLabel =
   );
 }
 
-const SUBCATEGORY_SLOT_COUNT = 3;
+const SUBCATEGORY_SLOT_COUNT = 20;
+
+// Same auto-grow rule as the upload form: one empty row after the last one
+// used, so twenty slots are available without rendering twenty empty rows.
+function visibleSlotCount(ids, names) {
+  let last = -1;
+  const mark = (arr) => (Array.isArray(arr) ? arr : []).forEach((v, i) => {
+    if (String(v || "").trim()) last = i;
+  });
+  mark(ids); mark(names);
+  return Math.min(SUBCATEGORY_SLOT_COUNT, Math.max(1, last + 2));
+}
 
 function slots(values) {
   const out = Array.isArray(values) ? values.slice(0, SUBCATEGORY_SLOT_COUNT).map((v) => String(v ?? "")) : [];
@@ -365,7 +376,9 @@ export function MediaEditor({ ctx, media, onChanged }) {
           {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
         </select>
       </label>
-      {slots(draft.subcategory_ids).map((value, index) => (
+      {slots(draft.subcategory_ids)
+        .slice(0, visibleSlotCount(draft.subcategory_ids, draft.subcategory_names))
+        .map((value, index) => (
         <div className="field" key={`subcat-${index}`}>
           <span>{index === 0 ? "Subcategories" : ""}</span>
           <select value={value} onChange={(event) => setSlot("subcategory_ids", index, event.target.value)} disabled={!subcategories.length}>

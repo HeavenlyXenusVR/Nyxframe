@@ -957,7 +957,7 @@ local function find_or_create_subcategory(category_id, name, user_id)
   return row and db.toint(row.id, row.id) or nil
 end
 
-local MAX_MEDIA_SUBCATEGORIES = 3
+local MAX_MEDIA_SUBCATEGORIES = 20
 
 local function clean_subcategory_name(value)
   return trim(tostring(value or "")):gsub("%s+", " "):sub(1, 80)
