@@ -164,6 +164,20 @@ export function Lightbox({ ctx, lightbox: lightboxProp }) {
           </div>
           <h2 className="lb-title">{item.title || "Untitled"}</h2>
           {item.description ? <p className="lb-desc">{item.description}</p> : null}
+          {item.source_url ? (
+            <p className="lb-source">
+              <span>Original source: </span>
+              {/* Uploader-supplied outbound link: no referrer, no ranking passed.
+                  The server only ever stores http/https here. */}
+              <a href={item.source_url} target="_blank" rel="noopener noreferrer nofollow"
+                 onClick={(event) => event.stopPropagation()}>
+                {(() => {
+                  try { return new URL(item.source_url).hostname.replace(/^www\./, ""); }
+                  catch { return item.source_url; }
+                })()}
+              </a>
+            </p>
+          ) : null}
           <StatsRow item={item} />
           {chips.length ? <ChipRow values={chips} /> : null}
           <div className="lb-actions">

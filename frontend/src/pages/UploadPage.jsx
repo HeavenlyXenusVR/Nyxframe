@@ -7,7 +7,7 @@ import { addPendingUploadJob } from "../uploadJobs.js";
 import { ChipRow, Page, RequireLogin, Segmented } from "../components/ui.jsx";
 import { formatBytes } from "../utils/format.js";
 
-const SUBCATEGORY_SLOT_COUNT = 3;
+const SUBCATEGORY_SLOT_COUNT = 20;
 const EDGE_SAFE_UPLOAD_BYTES = 80 * 1024 * 1024;
 const DEFAULT_CHUNK_BYTES = 20 * 1024 * 1024;
 // Uniform ceiling for every upload-related request (init/chunk/finish/direct
@@ -24,6 +24,26 @@ const SUBCATEGORY_SLOTS = [
   { label: "Character or subject", placeholder: "e.g. Cloud Strife" },
   { label: "Variant or context", placeholder: "e.g. Advent Children" },
 ];
+
+// The first three keep their original guidance; the rest are plain extras.
+// Twenty always-visible inputs would bury the rest of the form, so the list
+// grows as it is filled -- see visibleSubcategoryCount below.
+function subcategorySlotMeta(index) {
+  return SUBCATEGORY_SLOTS[index] || {
+    label: `Subcategory ${index + 1}`,
+    placeholder: "Another subcategory (optional)",
+  };
+}
+
+// Always show at least the three labelled fields, plus one empty field after
+// the last one filled, capped at SUBCATEGORY_SLOT_COUNT.
+function visibleSubcategoryCount(values) {
+  const filled = (Array.isArray(values) ? values : [])
+    .map((v) => String(v || "").trim());
+  let last = -1;
+  filled.forEach((v, i) => { if (v) last = i; });
+  return Math.min(SUBCATEGORY_SLOT_COUNT, Math.max(SUBCATEGORY_SLOTS.length, last + 2));
+}
 
 const VISIBILITY_OPTIONS = [
   ["public", "Public"],
@@ -615,11 +635,12 @@ export function UploadPage({ ctx }) {
               <small className="field-hint">Pick an existing category or type a new one.</small>
             </label>
             <div className="upload-subcategories">
-              {SUBCATEGORY_SLOTS.map((slot, index) => {
+              {Array.from({ length: visibleSubcategoryCount(form.subcategories) }, (_, index) => {
+                const slot = subcategorySlotMeta(index);
                 const text = normalizeSlots(form.subcategories)[index];
                 const isExisting = existingSubcategories.some((sub) => sameName(sub.name, text));
                 return (
-                  <label className="field" key={slot.label}>
+                  <label className="field" key={`subcat-slot-${index}`}>
                     <span className="field-head">
                       {slot.label}
                       {text.trim() ? <small className={`placement-badge ${isExisting ? "is-existing" : "is-new"}`}>{isExisting ? "Existing" : "New"}</small> : null}
