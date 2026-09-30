@@ -322,6 +322,7 @@ final class VideoPlayerController: ObservableObject {
                 guard let self else { return }
                 PlaybackPreferences.clearResumePosition(mediaId: self.mediaId)
                 self.lastKnownTime = 0
+                NotificationCenter.default.post(name: .nyxframeVideoReachedEnd, object: nil, userInfo: ["mediaId": self.mediaId])
             }
         }
         let newPlayer = AVPlayer(playerItem: item)
@@ -516,7 +517,7 @@ final class VideoPlayerController: ObservableObject {
         // otherwise leave BackgroundMusicService permanently ducked with no
         // matching "stopped" rate change ever coming. A redundant post when
         // nothing was playing is a harmless no-op fade to the same volume.
-        NotificationCenter.default.post(name: .nyxframeVideoPlaybackChanged, object: nil, userInfo: ["playing": false])
+        NotificationCenter.default.post(name: .nyxframeVideoPlaybackChanged, object: nil, userInfo: ["playing": false, "closed": true])
 
         // Playback telemetry -- fired once here (controller teardown = the
         // end of this playback session), same moment VideoPlayer.jsx's own

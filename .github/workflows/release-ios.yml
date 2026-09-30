@@ -1,4 +1,4 @@
-name: Release iOS IPA
+name: Release iOS + tvOS
 
 on:
   push:
@@ -224,6 +224,40 @@ jobs:
           echo "ipa_name=$IPA_NAME" >> "$GITHUB_OUTPUT"
           echo "ipa_path=ios/build/$IPA_NAME" >> "$GITHUB_OUTPUT"
 
+      # The Apple TV app ships in the same release. Built unsigned (the
+      # signing secrets above are an iOS profile, which can't sign a tvOS
+      # app); sign it at install time with Sideloadly/Xcode. Never allowed
+      # to block the iOS release -- a failure here just leaves the TV IPA
+      # off the release with a warning.
+      - name: Archive tvOS app (unsigned)
+        id: tvos
+        continue-on-error: true
+        working-directory: ios
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          xcodebuild archive \
+            -project ImageGallery.xcodeproj \
+            -scheme NyxframeTV \
+            -configuration Release \
+            -destination "generic/platform=tvOS" \
+            -archivePath build/NyxframeTV.xcarchive \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            SKIP_INSTALL=NO > /tmp/xcodebuild-tvos.log 2>&1 || true
+          TV_APP=$(find build/NyxframeTV.xcarchive -name "*.app" | head -1)
+          if [ -z "$TV_APP" ] || [ ! -f "$TV_APP/Assets.car" ]; then
+            echo "::warning::tvOS archive failed -- releasing without the Apple TV IPA"
+            grep "error:" /tmp/xcodebuild-tvos.log | head -30 || tail -30 /tmp/xcodebuild-tvos.log
+            exit 1
+          fi
+          TV_IPA="NyxframeTV-${VERSION}-unsigned.ipa"
+          mkdir -p build/TVPayload/Payload
+          cp -R "$TV_APP" build/TVPayload/Payload/
+          (cd build/TVPayload && zip -qr "../$TV_IPA" Payload/ -x "*.DS_Store")
+          echo "tv_ipa=$TV_IPA" >> "$GITHUB_OUTPUT"
+          echo "Apple TV IPA: $(du -sh build/$TV_IPA)"
+
       - name: Update altstore-source.json
         run: |
           VERSION="${{ steps.version.outputs.version }}"
@@ -274,10 +308,17 @@ jobs:
           else
             INSTALL_NOTE="Download the IPA and install with [Sideloadly](https://sideloadly.io/) or [AltStore](https://altstore.io/)."
           fi
+          TV_IPA="${{ steps.tvos.outputs.tv_ipa }}"
+          ASSETS=("ios/build/$IPA_NAME")
+          TV_NOTE=""
+          if [ -n "$TV_IPA" ] && [ -f "ios/build/$TV_IPA" ]; then
+            ASSETS+=("ios/build/$TV_IPA")
+            TV_NOTE=$(printf '\n\n**Apple TV:** `%s` is the tvOS app (tvOS 17+). It is unsigned -- sign and install it on your Apple TV with [Sideloadly](https://sideloadly.io/) or Xcode (Window > Devices and Simulators).' "$TV_IPA")
+          fi
           gh release create "$TAG" \
             --title "Nyxframe iOS v${VERSION}" \
-            --notes "$(printf '## Nyxframe iOS v%s\n\n**Installation:** %s\n\n**AltStore users:** Add the source URL from Settings to get automatic updates.' "$VERSION" "$INSTALL_NOTE")" \
-            "ios/build/$IPA_NAME"
+            --notes "$(printf '## Nyxframe iOS v%s\n\n**Installation:** %s\n\n**AltStore users:** Add the source URL from Settings to get automatic updates.%s' "$VERSION" "$INSTALL_NOTE" "$TV_NOTE")" \
+            "${ASSETS[@]}"
 
       # Best-effort: never fail the build over this housekeeping commit.
       - name: Commit updated altstore-source.json

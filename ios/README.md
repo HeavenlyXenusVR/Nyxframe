@@ -70,4 +70,39 @@ ios/
       ViewModels/            One per screen area
       Views/                 Auth, Feed, MediaDetail, Upload, Studio, Profile, Notifications, Settings
   ImageGalleryTests/          Model-decoding unit tests
+  NyxframeTV/                 Apple TV app (see below)
+    Resources/              Info.plist, Assets.xcassets (layered icon + Top Shelf)
+    Sources/                TV-only UI, background music, TV API additions
 ```
+
+## Apple TV (tvOS 17+)
+
+`NyxframeTV` is a second target in the same XcodeGen project. It reuses the
+iOS app's models, API client, session/auth, image cache, social view models
+and `VideoPlayerController`, and adds its own focus-driven interface:
+
+- **Tabs:** Discover (categories, media type, sort, "On this day", endless
+  grid, Slideshow, Surprise Me), Trending (time windows + top creators),
+  Search (posts and people, popular tags), Library (Following, Liked,
+  Collections), Inbox (notifications, messages with replies, friend
+  requests) and Account (sign-in with two-factor, music and playback
+  settings).
+- **Posts:** full-screen images, native AVKit video with a quality menu in
+  the transport bar, captions when generated, resume position, likes,
+  saves, reactions, threaded comments, Previous/Next through the feed and
+  a "More like this" shelf.
+- **Background music, 24/7:** starts at launch with no interaction (no
+  account needed), shuffles the admin's tracks forever, recovers from
+  stalls, dropped connections and audio interruptions on its own, fades
+  out when a video starts and fades back in when the video reaches its
+  end (or when you leave it). The remote's Play/Pause toggles it while
+  browsing; volume, skip and on/off live in Account.
+- **Slideshow:** ambient full-screen photo mode that keeps the TV awake.
+
+Browsing, watching and the music all work signed out; signing in unlocks
+the personal feeds, likes, comments, inbox and messaging.
+
+**Build:** `xcodegen generate`, then build the `NyxframeTV` scheme for an
+Apple TV or the tvOS Simulator. CI (`.github/workflows/build-tvos.yml`)
+produces an unsigned `NyxframeTV-*.ipa` artifact that can be signed and
+sideloaded onto an Apple TV.

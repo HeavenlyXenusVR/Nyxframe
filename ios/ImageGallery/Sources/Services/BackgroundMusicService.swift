@@ -102,7 +102,3 @@ final class BackgroundMusicService: ObservableObject {
         }
     }
 }
-
-extension Notification.Name {
-    static let nyxframeVideoPlaybackChanged = Notification.Name("nyxframeVideoPlaybackChanged")
-}
