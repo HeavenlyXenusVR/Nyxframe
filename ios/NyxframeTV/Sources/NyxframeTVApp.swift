@@ -12,7 +12,10 @@ struct NyxframeTVApp: App {
         // Music starts before anything else -- before the backend origin
         // resolves, before sign-in -- so the very first thing a viewer
         // hears on launch is the soundtrack, with no interaction needed.
-        Task { @MainActor in TVBackgroundMusic.shared.start() }
+        Task { @MainActor in
+            TVBackgroundMusic.shared.start()
+            TVSiteBackground.shared.start()
+        }
     }
 
     var body: some Scene {
@@ -84,6 +87,7 @@ struct TVRootView: View {
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             music.ensurePlaying()
+            TVSiteBackground.shared.resync()
             Task {
                 await session.refreshCurrentUser()
                 await unreadCounts.refresh()

@@ -98,6 +98,11 @@ and `VideoPlayerController`, and adds its own focus-driven interface:
   end (or when you leave it). The remote's Play/Pause toggles it while
   browsing; volume, skip and on/off live in Account.
 - **Slideshow:** ambient full-screen photo mode that keeps the TV awake.
+- **Synced background:** every screen sits on the same rotating gallery
+  background the website shows (`/api/site/background`), crossfading over
+  5 seconds at the web's 50% strength when the server rotates it.
+- **Home filters** include the web's 18+ choice (Show / Hide / Only 18+,
+  remembered on the TV), and grids are always four cards across.
 
 Browsing, watching and the music all work signed out; signing in unlocks
 the personal feeds, likes, comments, inbox and messaging.

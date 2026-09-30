@@ -174,31 +174,37 @@ struct ProfileScreen: View {
 
 struct TVCollectionCard: View {
     let collection: CollectionSummary
+    /// Fixed width for horizontal rows; nil fills a grid column.
+    var width: CGFloat? = 340
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 0) {
-                CachedAsyncImage(url: collection.coverUrl.flatMap(URL.init(string:))) { phase in
-                    switch phase {
-                    case .success(let image): image.resizable().scaledToFill()
-                    default:
-                        ZStack {
-                            TVTheme.accent.opacity(0.2)
-                            Image(systemName: collection.isSmart == true ? "wand.and.stars" : "folder").font(.largeTitle)
+                Color.clear
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .overlay {
+                        CachedAsyncImage(url: collection.coverUrl.flatMap(URL.init(string:))) { phase in
+                            switch phase {
+                            case .success(let image): image.resizable().scaledToFill()
+                            default:
+                                ZStack {
+                                    TVTheme.accent.opacity(0.2)
+                                    Image(systemName: collection.isSmart == true ? "wand.and.stars" : "folder").font(.largeTitle)
+                                }
+                            }
                         }
                     }
-                }
-                .frame(width: 340, height: 191)
-                .clipped()
+                    .clipped()
                 VStack(alignment: .leading, spacing: 4) {
                     Text(collection.name).font(.callout.bold()).lineLimit(1)
                     Text(collection.isSmart == true ? "Smart collection" : (collection.isPublic == false ? "Private" : "Collection"))
                         .font(.caption2).foregroundStyle(.secondary)
                 }
                 .padding(14)
-                .frame(width: 340, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(width: width)
         }
         .buttonStyle(.card)
     }

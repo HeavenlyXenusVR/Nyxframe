@@ -72,13 +72,15 @@ enum TVTheme {
         colors: [Color(red: 0.04, green: 0.07, blue: 0.10), Color(red: 0.05, green: 0.12, blue: 0.13)],
         startPoint: .topLeading, endPoint: .bottomTrailing
     )
-    static let gridSpacing: CGFloat = 48
-    static let cardWidth: CGFloat = 380
+    static let gridSpacing: CGFloat = 44
+    static let gridColumns = 4
 }
 
 struct TVScreenBackground: ViewModifier {
     func body(content: Content) -> some View {
-        content.background(TVTheme.background.ignoresSafeArea())
+        // Every screen sits on the synced, crossfading site background --
+        // the same image the website is showing right now.
+        content.background(TVSiteBackdrop())
     }
 }
 
@@ -92,14 +94,19 @@ extension View {
 /// gives the native lift-and-parallax focus effect.
 struct TVMediaCard: View {
     let item: MediaItem
-    var width: CGFloat = TVTheme.cardWidth
+    /// Fixed width for shelves; nil fills the grid column it sits in.
+    var width: CGFloat? = nil
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 0) {
-                TVMediaThumbnail(item: item)
-                    .frame(width: width, height: width * 9 / 16)
+                // A 16:9 frame the thumbnail fills and is cropped to, so an
+                // image of any shape can never push the card out of its
+                // column or spill over its neighbours.
+                Color.clear
+                    .aspectRatio(16 / 9, contentMode: .fit)
+                    .overlay { TVMediaThumbnail(item: item) }
                     .clipped()
                 VStack(alignment: .leading, spacing: 4) {
                     Text(item.title?.nilIfEmpty ?? "Untitled")
@@ -112,8 +119,9 @@ struct TVMediaCard: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 12)
-                .frame(width: width, alignment: .leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(width: width)
         }
         .buttonStyle(.card)
     }
@@ -169,7 +177,9 @@ struct TVMediaGrid: View {
     var onReachEnd: ((MediaItem) -> Void)?
     let onSelect: (MediaItem, [MediaItem]) -> Void
 
-    private let columns = [GridItem(.adaptive(minimum: TVTheme.cardWidth, maximum: TVTheme.cardWidth), spacing: TVTheme.gridSpacing)]
+    /// Always four across. Spacing leaves room for the focused card's lift
+    /// so it grows over the gap, never under its neighbour.
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: TVTheme.gridSpacing, alignment: .top), count: TVTheme.gridColumns)
 
     var body: some View {
         LazyVGrid(columns: columns, alignment: .leading, spacing: TVTheme.gridSpacing) {
