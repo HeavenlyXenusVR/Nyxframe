@@ -4,20 +4,14 @@
 -- (image_gallery), so there's no per-dbname pool table -- just a flat pool
 -- of Pg instances, all against that one database.
 --
--- Previously this held exactly one Pg instance, and every DB-bound request
--- serialized behind pg.lua's own busy-flag lock (see that file's header
--- comment) -- necessary to stop concurrent coroutines corrupting a SHARED
--- connection's wire protocol, but it meant literally every query anywhere
--- in the app -- an HLS segment auth check, an unrelated comment post, a
--- background digest job -- queued behind whichever one currently held that
--- single socket. Real concurrent viewers (this is a public gallery) turned
--- that into a genuine bottleneck independent of any specific route's own
--- query cost. A pool of independent Pg instances lets that many requests'
--- queries actually run in parallel; each instance still has its own
--- pg.lua-level lock protecting IT specifically, unchanged, so nothing about
--- that safety property is touched here -- this only adds a layer above it
--- that hands out whichever instance is currently idle instead of forcing
--- everyone onto the same one.
+-- Previously this held exactly one Pg instance and every query in the app
+-- serialized behind it. It is now a swarmlua/pgpool.lua pool: each query
+-- borrows an idle connection for its own round trip, a copas semaphore
+-- queues callers FIFO when all db_pool_size connections are busy (no
+-- polling, and nobody waits behind one specific slow query while another
+-- connection is free), connections open lazily and extras close after a
+-- minute idle, and a failed SQL statement no longer throws away (and
+-- leaks) its connection.
 --
 -- NUMERIC precision note: unlike SwarmPanel's image_gallery access (which
 -- kept the columns as NUMERIC(20,0) and patched pgmoon's oid-1700
@@ -29,54 +23,44 @@
 -- covers full precision for every wide-integer column in this schema. Do not
 -- add a NUMERIC/oid-1700 patch here unless a future migration reintroduces
 -- NUMERIC id columns.
-local Pg = require("swarmlua.pg")
+local Pool = require("swarmlua.pgpool")
 
 local M = {}
-local pool = {}
-local round_robin = 0
+local pool = nil
 local cfg = nil
+
+-- All app tables use "timestamp without time zone" (oid 1114) columns.
+-- pgmoon has no built-in deserializer for it, so it falls through to
+-- "string" and comes back verbatim in Postgres's text-output format
+-- ("2026-07-26 18:48:07.797921" -- space separator, no zone). Python's
+-- asyncpg driver returns a naive datetime for the same column, and
+-- app/routers/_shared.py's _jsonable() renders it via .isoformat(), which
+-- uses a "T" separator and (for a naive datetime) no zone suffix. Convert
+-- to match so both backends emit byte-identical timestamps for the same
+-- row. Runs on every fresh connection, reconnects included.
+local function on_connect(conn)
+  conn:set_type_deserializer(1114, "timestamp", function(_, val)
+    return (val:gsub(" ", "T", 1))
+  end)
+end
 
 function M.init(settings)
   cfg = settings
-end
-
-local function new_conn()
-  return Pg.new({
+  pool = Pool.new({
     host = cfg.db_host,
     port = cfg.db_port,
     user = cfg.db_user,
     password = cfg.db_password,
     database = cfg.db_name,
+    size = cfg.db_pool_size or 1,
+    on_connect = on_connect,
   })
-end
-
--- Hands back an idle Pg instance where possible, growing the pool lazily
--- (up to db_pool_size) as concurrent demand actually shows up rather than
--- opening every connection at startup -- most of the time this app isn't
--- under concurrent DB load, so there's no reason to hold open connections
--- nothing is using yet. If every existing instance is currently mid-query,
--- round-robin across them instead of always piling onto pool[1]: each one
--- still queues safely on its own pg.lua-level lock (unchanged), this just
--- spreads that wait across db_pool_size sockets instead of concentrating
--- all of it on one.
-local function acquire()
-  for _, p in ipairs(pool) do
-    if not p.busy then return p end
-  end
-  if #pool < (cfg.db_pool_size or 1) then
-    local p = new_conn()
-    pool[#pool + 1] = p
-    return p
-  end
-  round_robin = (round_robin % #pool) + 1
-  return pool[round_robin]
 end
 
 -- Runs `sql` (with %s-style placeholders, pgmoon-escaped) against the db.
 -- Returns rows (array of column->value tables) or nil, err.
 function M.query(sql, ...)
-  local p = acquire()
-  local rows, err = p:query(sql, ...)
+  local rows, err = pool:query(sql, ...)
   -- pg.lua's own query() can legitimately return `nil, nil` for a
   -- connection-level failure it has no formatted message for (e.g. a
   -- socket reset mid-query after this connection sat unused through a long
