@@ -1,94 +1,57 @@
 import SwiftUI
 
+/// Explore -- the app's front page.
+///
+/// Top to bottom: a header that knows what night it is (tonight's moon
+/// phase and a greeting), one search capsule into the unified Search,
+/// the Spotlight carousel of the week's trending posts, "Echoes" from
+/// this day in past years, then the feed itself as a staggered grid
+/// under a filter shelf that pins to the top while you scroll.
 struct FeedView: View {
     @StateObject private var viewModel = FeedViewModel()
     @EnvironmentObject private var session: SessionStore
-    @EnvironmentObject private var unreadCounts: UnreadCountsService
+    @EnvironmentObject private var quickActionRouter: QuickActionRouter
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @State private var showingFilters = false
-    @FocusState private var searchFocused: Bool
+    /// Bumped by pull-to-refresh so the self-fetching rails reload too.
+    @State private var railsReloadKey = 0
 
-    private var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: Appearance.gridColumnMinWidth(session.currentUser?.userSettings?.gridDensity)), spacing: Appearance.gridSpacing(session.currentUser?.userSettings?.columnGap))]
-    }
+    private var settings: UserSettings? { session.currentUser?.userSettings }
+    private var gridSpacing: CGFloat { min(Appearance.gridSpacing(settings?.columnGap), 16) }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                greeting
-
-                searchField
+            LazyVStack(alignment: .leading, spacing: 26, pinnedViews: [.sectionHeaders]) {
+                header
+                searchCapsule
 
                 if !isFiltering {
-                    MemoriesRailView()
-                    TrendingRailView()
+                    SpotlightCarousel(reloadKey: railsReloadKey)
+                    MemoriesRailView(reloadKey: railsReloadKey)
                 }
 
-                CategoryChipsRow(selectedCategoryId: $viewModel.categoryId) { categoryId in
-                    viewModel.categoryId = categoryId
-                    viewModel.subcategoryId = nil
-                    Task { await viewModel.loadInitial() }
+                Section {
+                    resultsSection
+                } header: {
+                    filterShelf
                 }
-
-                SortChipsRow(sort: $viewModel.sort) {
-                    Task { await viewModel.loadInitial() }
-                }
-
-                resultsSection
             }
-            .padding(.vertical, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 24)
         }
-        .navigationTitle("Discover")
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) {
-                // Was a people-only "Find People" screen. Media search
-                // lived separately, in the field below this toolbar, and
-                // neither could answer the other's question -- the same
-                // split the web app had before /search unified it. One
-                // destination now covers both.
-                NavigationLink(destination: SearchView()) {
-                    Image(systemName: "magnifyingglass")
-                }
-                .accessibilityLabel("Search")
-            }
-            ToolbarItem(placement: .topBarLeading) {
-                NavigationLink(destination: CollectionsListView()) {
-                    Image(systemName: "folder")
-                }
-                .accessibilityLabel("Collections")
-            }
-            ToolbarItem(placement: .topBarLeading) {
-                NavigationLink(destination: FollowingLikedView()) {
-                    Image(systemName: "person.2")
-                }
-                .accessibilityLabel("Following and liked")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
-                    showingFilters = true
-                } label: {
-                    Image(systemName: "line.3.horizontal.decrease.circle")
-                }
-                .accessibilityLabel("More filters")
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                NavigationLink(destination: NotificationsView()) {
-                    Image(systemName: "bell")
-                }
-                .accessibilityLabel("Notifications")
-                .overlay(alignment: .topTrailing) {
-                    if unreadCounts.notifications > 0 {
-                        Circle()
-                            .fill(Color.red)
-                            .frame(width: 8, height: 8)
-                            .offset(x: 2, y: -2)
-                    }
-                }
-            }
+        .nyxScreen(stars: true)
+        .toolbar(.hidden, for: .navigationBar)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            // Frosts the status-bar strip so the feed doesn't scroll
+            // under the clock unreadably (the nav bar is hidden here).
+            Color.clear.frame(height: 0).background(.ultraThinMaterial)
         }
         .sheet(isPresented: $showingFilters) {
             FeedFilterSheet(viewModel: viewModel)
+                .presentationDetents([.medium, .large])
         }
         .refreshable {
+            railsReloadKey += 1
             await viewModel.loadInitial()
         }
         .task {
@@ -98,8 +61,8 @@ struct FeedView: View {
                 // init, which runs before session.currentUser is
                 // necessarily populated) instead of every time this view
                 // reappears, so it never clobbers a sort the viewer already
-                // picked for this session via SortChipsRow.
-                if let defaultSort = session.currentUser?.userSettings?.defaultSort, !defaultSort.isEmpty {
+                // picked for this session from the filter shelf.
+                if let defaultSort = settings?.defaultSort, !defaultSort.isEmpty {
                     viewModel.sort = defaultSort
                 }
                 await viewModel.loadInitial()
@@ -108,87 +71,223 @@ struct FeedView: View {
     }
 
     private var isFiltering: Bool {
-        !viewModel.query.isEmpty || viewModel.categoryId != nil || viewModel.subcategoryId != nil
+        !viewModel.query.isEmpty || viewModel.categoryId != nil || viewModel.subcategoryId != nil || viewModel.mediaKind != nil
     }
 
-    private var greeting: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(timeOfDayGreeting)
-                .font(.title2).bold()
-            Text("Here's what the archive's been up to.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+    // MARK: Header
+
+    private var header: some View {
+        let moon = MoonPhase.current()
+        return HStack(alignment: .center, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Image(systemName: moon.symbol)
+                        .symbolRenderingMode(.hierarchical)
+                    Text("\(moon.name) · \(Date().formatted(.dateTime.weekday(.wide)))".uppercased())
+                        .tracking(1.2)
+                }
+                .font(Nyx.eyebrow)
+                .foregroundStyle(Color.accentColor)
+                .accessibilityElement(children: .combine)
+
+                Text(greeting)
+                    .font(Nyx.display(30))
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
+            }
+            Spacer(minLength: 0)
+            Button {
+                quickActionRouter.pendingDestination = .you
+            } label: {
+                AvatarView(
+                    urlString: session.currentUser?.avatarUrl,
+                    fallbackInitial: String((session.currentUser?.displayName?.nilIfEmpty ?? session.currentUser?.username ?? "?").prefix(1)),
+                    shape: AvatarShape(settings?.profileAvatarShape),
+                    size: 46
+                )
+                .overlay(
+                    Circle().strokeBorder(
+                        AngularGradient(colors: [Color.accentColor, .purple, Color.accentColor], center: .center),
+                        lineWidth: 2
+                    )
+                    .padding(-4)
+                )
+            }
+            .buttonStyle(NyxPressStyle())
+            .accessibilityLabel("Your profile")
         }
-        .padding(.horizontal)
+        .padding(.horizontal, 20)
     }
 
-    private var timeOfDayGreeting: String {
+    private var greeting: String {
         let name = session.currentUser?.displayName?.nilIfEmpty ?? session.currentUser?.username ?? "there"
         let hour = Calendar.current.component(.hour, from: Date())
         switch hour {
-        case 5..<12: return "Good morning, \(name)"
-        case 12..<17: return "Good afternoon, \(name)"
-        case 17..<22: return "Good evening, \(name)"
+        case 5..<12: return "Morning, \(name)"
+        case 12..<17: return "Afternoon, \(name)"
+        case 17..<22: return "Evening, \(name)"
         default: return "Still up, \(name)?"
         }
     }
 
-    private var searchField: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-            TextField("Search wallpapers, memes, tags…", text: $viewModel.query)
-                .focused($searchFocused)
-                .submitLabel(.search)
-                .onSubmit { Task { await viewModel.loadInitial() } }
-            if !viewModel.query.isEmpty {
-                Button {
-                    viewModel.query = ""
-                    searchFocused = false
-                    Task { await viewModel.loadInitial() }
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .foregroundStyle(.secondary)
+    // MARK: Search
+
+    private var searchCapsule: some View {
+        HStack(spacing: 10) {
+            // One door into the unified Search (posts and people at once)
+            // rather than a feed-only text field beside a separate people
+            // search -- see SearchView's header comment for why that split
+            // was removed. Feed-only keyword filtering still lives in the
+            // filter sheet, which also saves it as an alert.
+            NavigationLink {
+                SearchView()
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                    Text("Search posts, tags, people")
+                        .foregroundStyle(Nyx.mist)
+                    Spacer()
                 }
-                .buttonStyle(.plain)
+                .font(.system(.subheadline, design: .rounded))
+                .padding(.horizontal, 16)
+                .frame(height: 50)
+                .nyxGlass(radius: 25)
             }
+            .buttonStyle(NyxPressStyle(scale: 0.98))
+
+            Button {
+                showingFilters = true
+            } label: {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.system(size: 17, weight: .semibold))
+                    .frame(width: 50, height: 50)
+                    .nyxGlass(radius: 25)
+                    .overlay(alignment: .topTrailing) {
+                        if isFiltering {
+                            Circle().fill(Color.accentColor).frame(width: 10, height: 10).offset(x: -6, y: 6)
+                        }
+                    }
+            }
+            .buttonStyle(NyxPressStyle())
+            .accessibilityLabel("Filters")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .softCard()
-        .padding(.horizontal)
+        .padding(.horizontal, 20)
     }
+
+    // MARK: Filter shelf
+
+    private static let sortOptions: [(value: String, label: String, icon: String)] = [
+        ("new", "Newest", "sparkles"),
+        ("popular", "Popular", "heart.fill"),
+        ("views", "Most viewed", "eye.fill"),
+        ("downloads", "Downloaded", "arrow.down.circle.fill"),
+        ("old", "Oldest", "hourglass"),
+    ]
+
+    private var currentSort: (value: String, label: String, icon: String) {
+        Self.sortOptions.first { $0.value == viewModel.sort } ?? Self.sortOptions[0]
+    }
+
+    private var filterShelf: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                Menu {
+                    Picker("Sort", selection: Binding(
+                        get: { viewModel.sort },
+                        set: { newValue in
+                            guard newValue != viewModel.sort else { return }
+                            viewModel.sort = newValue
+                            Task { await viewModel.loadInitial() }
+                        }
+                    )) {
+                        ForEach(Self.sortOptions, id: \.value) { option in
+                            Label(option.label, systemImage: option.icon).tag(option.value)
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: currentSort.icon).imageScale(.small)
+                        Text(currentSort.label)
+                        Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold))
+                    }
+                    .font(.system(.footnote, design: .rounded).weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Color.accentColor.opacity(0.16), in: Capsule())
+                    .foregroundStyle(Color.accentColor)
+                }
+                .accessibilityLabel("Sort: \(currentSort.label)")
+
+                Rectangle()
+                    .fill(Nyx.hairline)
+                    .frame(width: 1, height: 22)
+
+                if !viewModel.query.isEmpty {
+                    NyxChip(title: "“\(viewModel.query)”", systemImage: "xmark", isSelected: true) {
+                        viewModel.query = ""
+                        Task { await viewModel.loadInitial() }
+                    }
+                    .accessibilityLabel("Clear search \(viewModel.query)")
+                }
+
+                CategoryChipsRow(selectedCategoryId: $viewModel.categoryId) { categoryId in
+                    viewModel.categoryId = categoryId
+                    viewModel.subcategoryId = nil
+                    Task { await viewModel.loadInitial() }
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 10)
+        }
+        .background(.ultraThinMaterial)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Nyx.hairline).frame(height: 1)
+        }
+    }
+
+    // MARK: Results
 
     @ViewBuilder
     private var resultsSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(isFiltering ? "Results" : "Fresh uploads")
-                .font(.headline)
-                .padding(.horizontal)
+        VStack(alignment: .leading, spacing: 14) {
+            NyxSectionHeader(
+                eyebrow: isFiltering ? "Filtered" : "The feed",
+                title: isFiltering ? "Results" : "Fresh tonight"
+            )
+            .padding(.top, 12)
 
             if let errorMessage = viewModel.errorMessage {
                 InlineErrorView(message: errorMessage) { await viewModel.loadInitial() }
             }
 
             if viewModel.isLoading && viewModel.items.isEmpty {
-                SkeletonGridView(columns: columns)
+                SkeletonGridView(lanes: lanes)
             } else if viewModel.items.isEmpty {
-                ContentUnavailableCompat(title: "No media found", systemImage: "photo.on.rectangle.angled")
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 40)
+                ContentUnavailableCompat(
+                    title: "Nothing under these stars",
+                    systemImage: "sparkle.magnifyingglass",
+                    hint: isFiltering ? "Try another category, or clear the filters." : nil
+                )
+                .frame(maxWidth: .infinity)
+                .padding(.top, 40)
             } else {
-                LazyVGrid(columns: columns, spacing: Appearance.gridSpacing(session.currentUser?.userSettings?.columnGap)) {
-                    ForEach(viewModel.items) { item in
-                        NavigationLink(destination: MediaDetailView(mediaId: item.id)) {
-                            MediaCard(item: item)
-                        }
-                        .buttonStyle(.plain)
-                        .task {
-                            await viewModel.loadMoreIfNeeded(currentItem: item)
-                        }
+                MasonryGrid(
+                    items: viewModel.items,
+                    lanes: lanes,
+                    spacing: gridSpacing,
+                    aspectRatio: { GridRhythm.aspectRatio(for: $0, setting: settings?.cardAspectRatio) }
+                ) { item in
+                    NavigationLink(destination: MediaDetailView(mediaId: item.id)) {
+                        MediaCard(item: item, aspectRatio: GridRhythm.aspectRatio(for: item, setting: settings?.cardAspectRatio))
+                    }
+                    .buttonStyle(NyxPressStyle(scale: 0.97))
+                    .task {
+                        await viewModel.loadMoreIfNeeded(currentItem: item)
                     }
                 }
-                .padding(.horizontal)
+                .padding(.horizontal, 16)
 
                 if viewModel.isLoadingMore {
                     ProgressView().frame(maxWidth: .infinity).padding()
@@ -196,42 +295,8 @@ struct FeedView: View {
             }
         }
     }
-}
 
-/// `ContentUnavailableView` is iOS 17+; this app's deployment target is iOS 16,
-/// so a tiny compatibility shim covers the empty-state look on iOS 16 devices.
-/// `hint` and `action` were added for the same reason the web app's
-/// EmptyState grew them: an empty screen that only states the fact is a
-/// dead end, and the most common causes here (a filter, the shortest
-/// trending window, an account with nothing in it yet) all have an
-/// obvious next step the viewer can't otherwise find.
-struct ContentUnavailableCompat<Action: View>: View {
-    let title: String
-    let systemImage: String
-    var hint: String? = nil
-    @ViewBuilder var action: () -> Action
-
-    var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: systemImage).font(.system(size: 40)).foregroundStyle(.secondary)
-            Text(title).foregroundStyle(.secondary)
-            if let hint {
-                Text(hint)
-                    .font(.footnote)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal, 28)
-            }
-            action()
-        }
-    }
-}
-
-/// The common case: a bare empty state with nothing to offer. Keeps
-/// every existing call site working unchanged, and makes `action` an
-/// `EmptyView`, which contributes no layout to the stack above.
-extension ContentUnavailableCompat where Action == EmptyView {
-    init(title: String, systemImage: String, hint: String? = nil) {
-        self.init(title: title, systemImage: systemImage, hint: hint) { EmptyView() }
+    private var lanes: Int {
+        GridRhythm.lanes(density: settings?.gridDensity, regularWidth: horizontalSizeClass == .regular)
     }
 }

@@ -8,12 +8,13 @@ struct MessagesView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("Kind", selection: $showingDirect) {
-                Text("Direct").tag(true)
-                Text("Groups").tag(false)
+            HStack(spacing: 8) {
+                NyxChip(title: "Direct", systemImage: "person", isSelected: showingDirect) { showingDirect = true }
+                NyxChip(title: "Groups", systemImage: "person.3", isSelected: !showingDirect) { showingDirect = false }
+                Spacer()
             }
-            .pickerStyle(.segmented)
-            .padding()
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
 
             List {
                 jumpToNewThreadLink
@@ -25,13 +26,13 @@ struct MessagesView: View {
             }
             .listStyle(.plain)
         }
-        .navigationTitle("Messages")
+        .nyxScreen()
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {
                     showingNewGroup = true
                 } label: {
-                    Image(systemName: "person.3.fill")
+                    Image(systemName: "square.and.pencil")
                 }
                 .accessibilityLabel("New group chat")
             }
@@ -97,9 +98,15 @@ private struct DirectThreadRow: View {
 
     var body: some View {
         HStack {
-            AvatarView(urlString: thread.avatarUrl, fallbackInitial: String((thread.username ?? "?").prefix(1)), size: 44)
+            AvatarView(urlString: thread.avatarUrl, fallbackInitial: String((thread.username ?? "?").prefix(1)), size: 48)
+                .overlay {
+                    if let unread = thread.unreadCount, unread > 0 {
+                        Circle().strokeBorder(Color.accentColor, lineWidth: 2).padding(-3)
+                    }
+                }
             VStack(alignment: .leading, spacing: 2) {
-                Text(thread.displayName ?? thread.username ?? "User").bold()
+                Text(thread.displayName ?? thread.username ?? "User")
+                    .font(.system(.body, design: .rounded).weight(.bold))
                 if let lastMessage = thread.lastMessage {
                     Text(lastMessage).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
@@ -111,11 +118,11 @@ private struct DirectThreadRow: View {
                 }
                 if let unread = thread.unreadCount, unread > 0 {
                     Text("\(unread)")
-                        .font(.caption2).bold()
-                        .padding(6)
-                        .background(Color.accentColor)
+                        .font(.system(size: 11, weight: .heavy, design: .rounded))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Color.accentColor, in: Capsule())
                         .foregroundStyle(.white)
-                        .clipShape(Circle())
                 }
             }
         }
@@ -128,11 +135,16 @@ private struct GroupThreadRow: View {
     var body: some View {
         HStack {
             Image(systemName: "person.3.fill")
-                .frame(width: 44, height: 44)
-                .background(.secondary.opacity(0.15))
-                .clipShape(Circle())
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(.white)
+                .frame(width: 48, height: 48)
+                .background(
+                    LinearGradient(colors: [Color.accentColor, .indigo], startPoint: .topLeading, endPoint: .bottomTrailing),
+                    in: Circle()
+                )
             VStack(alignment: .leading, spacing: 2) {
-                Text(thread.displayName ?? thread.name ?? "Group").bold()
+                Text(thread.displayName ?? thread.name ?? "Group")
+                    .font(.system(.body, design: .rounded).weight(.bold))
                 if let lastMessage = thread.lastMessage {
                     Text(lastMessage).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
@@ -150,11 +162,11 @@ private struct EmptyMessagesState: View {
 
     var body: some View {
         VStack(spacing: 8) {
-            Image(systemName: "message").font(.system(size: 36)).foregroundStyle(.secondary)
-            Text(text).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            ContentUnavailableCompat(title: "Quiet night", systemImage: "bubble.left.and.bubble.right", hint: text)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, 40)
         .listRowSeparator(.hidden)
+        .listRowBackground(Color.clear)
     }
 }

@@ -53,6 +53,7 @@ struct FeedFilterSheet: View {
                 }
             }
             .navigationTitle("Filters")
+            .nyxScreen()
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Apply") {

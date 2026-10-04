@@ -51,6 +51,7 @@ struct NewCollectionView: View {
                 }
             }
             .navigationTitle("New Collection")
+            .nyxScreen()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

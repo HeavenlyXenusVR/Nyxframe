@@ -57,6 +57,7 @@ struct NewGroupThreadView: View {
                 }
             }
             .navigationTitle("New Group")
+            .nyxScreen()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

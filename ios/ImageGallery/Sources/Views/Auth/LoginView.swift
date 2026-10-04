@@ -21,40 +21,50 @@ struct LoginView: View {
     }
 
     private var loginForm: some View {
-        Form {
-            Section {
-                TextField("Username", text: $username)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                SecureField("Password", text: $password)
-            }
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Welcome back")
+                .font(.system(.title2, design: .rounded).weight(.bold))
+            Text("Sign in to pick up where you left off.")
+                .font(.subheadline)
+                .foregroundStyle(Nyx.mist)
+                .padding(.bottom, 4)
+
+            NyxField(systemImage: "person", placeholder: "Username", text: $username, contentType: .username)
+            NyxField(systemImage: "key", placeholder: "Password", text: $password, isSecure: true, contentType: .password)
+                .onSubmit { Task { await login() } }
 
             if let errorMessage {
-                Section {
-                    Text(errorMessage).foregroundStyle(.red)
-                }
+                NyxFormError(message: errorMessage)
             }
 
-            Section {
-                Button {
-                    Task { await login() }
-                } label: {
-                    if isLoading {
-                        ProgressView()
-                    } else {
-                        Text("Log In").frame(maxWidth: .infinity)
-                    }
-                }
-                .disabled(username.isEmpty || password.isEmpty || isLoading)
-
-                Button("Need an account? Register") {
-                    showingRegister = true
+            Button {
+                Task { await login() }
+            } label: {
+                if isLoading {
+                    ProgressView().tint(.white)
+                } else {
+                    Text("Log In")
                 }
             }
+            .buttonStyle(NyxPrimaryButtonStyle())
+            .disabled(username.isEmpty || password.isEmpty || isLoading)
+            .padding(.top, 4)
+
+            Button {
+                showingRegister = true
+            } label: {
+                (Text("New here? ").foregroundColor(Nyx.mist) + Text("Create an account").foregroundColor(.accentColor).bold())
+                    .font(.footnote)
+                    .frame(maxWidth: .infinity)
+            }
+            .padding(.top, 2)
         }
+        .padding(22)
+        .nyxGlass(radius: Nyx.Radius.panel, elevated: true)
     }
 
     private func login() async {
+        guard !username.isEmpty, !password.isEmpty, !isLoading else { return }
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
@@ -64,6 +74,7 @@ struct LoginView: View {
                 pendingTwoFactorToken = token
             }
         } catch {
+            Haptics.error()
             errorMessage = error.localizedDescription
         }
     }

@@ -140,6 +140,7 @@ struct UploadView: View {
             publishBar
         }
         .navigationTitle("Upload")
+        .nyxScreen()
         .task { await viewModel.loadCategories() }
         // "Queued", not "complete" -- the transfer now runs in
         // BackgroundUploadManager independent of this screen (see

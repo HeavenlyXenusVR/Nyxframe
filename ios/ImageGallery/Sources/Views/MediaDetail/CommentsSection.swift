@@ -9,7 +9,23 @@ struct CommentsSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Comments (\(viewModel.comments.count))", systemImage: "bubble.left.and.bubble.right.fill").font(.headline)
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("CONVERSATION")
+                        .font(Nyx.eyebrow)
+                        .tracking(1.4)
+                        .foregroundStyle(Color.accentColor)
+                    Text("Comments")
+                        .font(.system(.title3, design: .rounded).weight(.bold))
+                }
+                Spacer()
+                Text("\(viewModel.comments.count)")
+                    .font(.system(.subheadline, design: .rounded).weight(.heavy))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Color.accentColor.opacity(0.14), in: Capsule())
+                    .foregroundStyle(Color.accentColor)
+            }
 
             if session.currentUser != nil, viewModel.media?.commentsEnabled != false {
                 if let replyTarget = viewModel.replyTarget {
@@ -52,7 +68,9 @@ struct CommentsSection: View {
             }
 
             if viewModel.comments.isEmpty {
-                Text("No comments yet").foregroundStyle(.secondary)
+                Text("No comments yet — start the conversation.")
+                    .font(.footnote)
+                    .foregroundStyle(Nyx.mist)
             }
         }
     }

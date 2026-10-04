@@ -4,9 +4,6 @@ struct ProfileView: View {
     @StateObject private var viewModel: ProfileViewModel
     @EnvironmentObject private var session: SessionStore
 
-    private var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: Appearance.gridColumnMinWidth(session.currentUser?.userSettings?.gridDensity, default_: 100)), spacing: Appearance.gridSpacing(session.currentUser?.userSettings?.columnGap))]
-    }
 
     init(username: String) {
         _viewModel = StateObject(wrappedValue: ProfileViewModel(username: username))
@@ -26,6 +23,7 @@ struct ProfileView: View {
             .padding()
         }
         .navigationTitle(viewModel.user?.displayName ?? viewModel.username)
+        .nyxScreen()
         .tint(Color(hex: viewModel.user?.userSettings?.accentColor))
         .toolbar {
             if viewModel.user?.friendStatus == "self" {
@@ -49,7 +47,7 @@ struct ProfileView: View {
                 }
             } else if let user = viewModel.user {
                 ToolbarItem(placement: .topBarTrailing) {
-                    ShareLink(item: profileShareURL(username: user.username)) {
+                    ShareLink(item: ProfileLinks.shareURL(username: user.username)) {
                         Image(systemName: "square.and.arrow.up")
                     }
                     .accessibilityLabel("Share profile")
@@ -125,15 +123,9 @@ struct ProfileView: View {
     @ViewBuilder
     private var mediaSection: some View {
         if !viewModel.media.isEmpty {
-            Text("Posts").font(.headline)
-            LazyVGrid(columns: columns, spacing: Appearance.gridSpacing(session.currentUser?.userSettings?.columnGap)) {
-                ForEach(viewModel.media) { item in
-                    NavigationLink(destination: MediaDetailView(mediaId: item.id)) {
-                        MediaCard(item: item)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
+            NyxSectionHeader(eyebrow: "Gallery", title: "Posts")
+                .padding(.horizontal, -20)
+            NyxMediaGrid(items: viewModel.media, horizontalPadding: 0)
         }
     }
 
@@ -231,14 +223,6 @@ struct ProfileView: View {
         }
     }
 
-    /// Matches the web app's route (`frontend/src/App.jsx`: `/users/:username`,
-    /// served under the GitHub Pages basename) so a shared link opens the
-    /// same profile there for anyone without the app installed.
-    private func profileShareURL(username: String) -> URL {
-        let encoded = username.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? username
-        return URL(string: "https://heavenlyxenusvr.github.io/Nyxframe/users/\(encoded)")
-            ?? URL(string: "https://heavenlyxenusvr.github.io/Nyxframe/")!
-    }
 }
 
 /// Split out of `ProfileView.body` to keep each individual view's expression
@@ -529,5 +513,16 @@ private struct ProfileCardBackground: ViewModifier {
         default: // "glass"
             content.softCard()
         }
+    }
+}
+
+enum ProfileLinks {
+    /// Matches the web app's route (`frontend/src/App.jsx`: `/users/:username`,
+    /// served under the GitHub Pages basename) so a shared link opens the
+    /// same profile there for anyone without the app installed.
+    static func shareURL(username: String) -> URL {
+        let encoded = username.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? username
+        return URL(string: "https://heavenlyxenusvr.github.io/Nyxframe/users/\(encoded)")
+            ?? URL(string: "https://heavenlyxenusvr.github.io/Nyxframe/")!
     }
 }

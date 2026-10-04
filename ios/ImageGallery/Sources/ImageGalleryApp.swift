@@ -39,32 +39,33 @@ struct RootView: View {
             if biometricLock.isEnabled && !biometricLock.isUnlocked {
                 BiometricLockView()
             } else if session.isBootstrapping {
-                ProgressView("Loading...")
+                LaunchVeilView()
             } else if session.currentUser != nil {
-                RootTabView()
+                AppShellView()
+                    .transition(.opacity)
             } else {
                 AuthContainerView()
+                    .transition(.opacity)
             }
         }
+        .animation(.easeInOut(duration: 0.35), value: session.currentUser?.id)
         .preferredColorScheme(colorScheme)
         .tint(Color(hex: session.currentUser?.userSettings?.accentColor))
         .modifier(GalleryFontDesign(galleryFont: session.currentUser?.userSettings?.galleryFont))
-        // gallery_bg_color -- mirrors web's --gallery-bg-override, which
-        // replaces the app's base --bg CSS variable everywhere. Applied as
-        // a background behind the root view; ScrollView-based screens
-        // (most of this app) show it through, but List/Form screens
-        // (Settings, Collections, Messages) paint their own opaque system
-        // grouped background on top regardless -- a real gap versus web's
-        // universal CSS variable, not something SwiftUI's List/Form let a
-        // background modifier override without replacing their appearance
-        // globally via UIKit interop.
-        .background(galleryBackgroundColor)
+        .background(NyxBackdrop(showsStars: false).ignoresSafeArea())
+        // gallery_bg_color -- mirrors web's --gallery-bg-override. Handed to
+        // the Nocturne backdrop (see NyxBackdrop) as an environment value,
+        // which every screen paints behind itself via `.nyxScreen()` --
+        // including List/Form screens, whose own opaque grouped background
+        // `.nyxScreen()` hides, so the override now reaches those too.
+        .environment(\.nyxBackdropHex, session.currentUser?.userSettings?.galleryBgColor)
+        .environment(\.nyxReduceMotion, session.currentUser?.userSettings?.reduceMotion == true)
         // reduce_motion: nils out the animation on every transaction that
         // flows through this point in the tree, including ones descendant
         // views set with explicit withAnimation(...) calls -- the
         // documented way to suppress animations app-wide from one place
-        // instead of threading a flag through all 8 files that currently
-        // call withAnimation/.animation individually.
+        // instead of threading a flag through every file that calls
+        // withAnimation/.animation individually.
         .transaction { transaction in
             if session.currentUser?.userSettings?.reduceMotion == true {
                 transaction.animation = nil
@@ -138,15 +139,6 @@ struct RootView: View {
         case "dark": return .dark
         default: return nil
         }
-    }
-
-    // Optional, unlike accentColor -- an unset gallery_bg_color means "use
-    // the system background", not "fall back to a default color".
-    private var galleryBackgroundColor: Color {
-        guard let hex = session.currentUser?.userSettings?.galleryBgColor, !hex.isEmpty else {
-            return Color(uiColor: .systemBackground)
-        }
-        return Color(hex: hex)
     }
 
     private func updatePolling() {

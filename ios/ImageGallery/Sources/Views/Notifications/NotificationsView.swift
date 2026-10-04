@@ -7,40 +7,52 @@ struct NotificationsView: View {
     var body: some View {
         List {
             if let errorMessage = viewModel.errorMessage {
-                Text(errorMessage).foregroundStyle(.red)
+                InlineErrorView(message: errorMessage) { await viewModel.load() }
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
             }
             if viewModel.isLoading && viewModel.items.isEmpty {
                 SkeletonRowList()
             } else {
-                ForEach(viewModel.items) { item in
-                    NavigationLink(destination: destination(for: item)) {
-                        NotificationRow(item: item, text: viewModel.text(for: item))
+                // Split into what's new since you last looked and what you
+                // already saw, so the eye lands on the unread rows first.
+                let unread = viewModel.items.filter { $0.readAt == nil }
+                let earlier = viewModel.items.filter { $0.readAt != nil }
+                if !unread.isEmpty {
+                    Section {
+                        rows(unread)
+                    } header: {
+                        sectionHeader("New")
                     }
-                    .onTapGesture {
-                        Task {
-                            await viewModel.markRead(item)
-                            await unreadCounts.refresh()
-                        }
+                }
+                if !earlier.isEmpty {
+                    Section {
+                        rows(earlier)
+                    } header: {
+                        sectionHeader("Earlier")
                     }
                 }
             }
         }
-        .navigationTitle("Notifications")
+        .listStyle(.plain)
+        .nyxScreen()
         .toolbar {
             if viewModel.unreadCount > 0 {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Mark all read") {
+                    Button {
                         Task {
                             await viewModel.markAllRead()
                             await unreadCounts.refresh()
                         }
+                    } label: {
+                        Label("Mark all read", systemImage: "checkmark.circle")
                     }
                 }
             }
         }
         .overlay {
             if viewModel.items.isEmpty && !viewModel.isLoading {
-                ContentUnavailableCompat(title: "You're all caught up", systemImage: "bell.slash")
+                ContentUnavailableCompat(title: "You're all caught up", systemImage: "moon.zzz", hint: "Follows, comments and reactions land here.")
             }
         }
         .refreshable { await viewModel.load() }
@@ -48,6 +60,27 @@ struct NotificationsView: View {
             await viewModel.load()
             await unreadCounts.refresh()
         }
+    }
+
+    private func rows(_ items: [NotificationItem]) -> some View {
+        ForEach(items) { item in
+            NavigationLink(destination: destination(for: item)) {
+                NotificationRow(item: item, text: viewModel.text(for: item))
+            }
+            .simultaneousGesture(TapGesture().onEnded {
+                Task {
+                    await viewModel.markRead(item)
+                    await unreadCounts.refresh()
+                }
+            })
+        }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(Nyx.eyebrow)
+            .tracking(1.4)
+            .foregroundStyle(Color.accentColor)
     }
 
     @ViewBuilder
@@ -114,7 +147,7 @@ private struct NotificationRow: View {
             }
         }
         .padding(.vertical, 2)
-        .listRowBackground(item.readAt == nil ? Color.accentColor.opacity(0.06) : Color.clear)
+        .listRowBackground(item.readAt == nil ? Color.accentColor.opacity(0.08) : Color.clear)
     }
 
     private var kind: NotificationKindStyle { NotificationKindStyle(item.kind) }

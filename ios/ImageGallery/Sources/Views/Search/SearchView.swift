@@ -36,7 +36,6 @@ struct SearchView: View {
     /// actually waiting for.
     @State private var generation = 0
 
-    private let columns = [GridItem(.adaptive(minimum: 150), spacing: 12)]
 
     var body: some View {
         ScrollView {
@@ -68,6 +67,7 @@ struct SearchView: View {
         .overlay { if isLoading && media.isEmpty && people.isEmpty { ProgressView() } }
         .searchable(text: $query, prompt: "Posts, tags, or people")
         .navigationTitle("Search")
+        .nyxScreen()
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: query) { newValue in
             generation += 1
@@ -90,15 +90,7 @@ struct SearchView: View {
                 systemImage: "magnifyingglass"
             )
         } else {
-            LazyVGrid(columns: columns, spacing: 12) {
-                ForEach(media) { item in
-                    NavigationLink(destination: MediaDetailView(mediaId: item.id)) {
-                        MediaCard(item: item)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal)
+            NyxMediaGrid(items: media)
         }
     }
 

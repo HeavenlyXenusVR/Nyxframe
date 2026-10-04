@@ -19,38 +19,44 @@ struct TwoFactorView: View {
     }
 
     var body: some View {
-        Form {
-            Section {
-                Text("Enter the 6-digit code from your authenticator app.")
-                TextField("Code", text: $code)
-                    .keyboardType(.numberPad)
-                Text(remainingSeconds > 0 ? "Expires in \(countdownText)" : "This sign-in attempt has expired — cancel and log in again.")
-                    .font(.footnote)
-                    .foregroundStyle(remainingSeconds > 0 ? Color.secondary : Color.red)
-            }
+        VStack(alignment: .leading, spacing: 14) {
+            Image(systemName: "lock.shield.fill")
+                .font(.system(size: 30))
+                .foregroundStyle(Color.accentColor)
+            Text("Two-factor check")
+                .font(.system(.title2, design: .rounded).weight(.bold))
+            Text("Enter the 6-digit code from your authenticator app.")
+                .font(.subheadline)
+                .foregroundStyle(Nyx.mist)
+
+            NyxField(systemImage: "number", placeholder: "Code", text: $code, contentType: .oneTimeCode, keyboard: .numberPad)
+
+            Text(remainingSeconds > 0 ? "Expires in \(countdownText)" : "This sign-in attempt has expired — cancel and log in again.")
+                .font(.footnote.monospacedDigit())
+                .foregroundStyle(remainingSeconds > 0 ? Nyx.mist : Color.pink)
 
             if let errorMessage {
-                Section {
-                    Text(errorMessage).foregroundStyle(.red)
-                }
+                NyxFormError(message: errorMessage)
             }
 
-            Section {
-                Button {
-                    Task { await verify() }
-                } label: {
-                    if isLoading {
-                        ProgressView()
-                    } else {
-                        Text("Verify").frame(maxWidth: .infinity)
-                    }
+            Button {
+                Task { await verify() }
+            } label: {
+                if isLoading {
+                    ProgressView().tint(.white)
+                } else {
+                    Text("Verify")
                 }
-                .disabled(code.isEmpty || isLoading || remainingSeconds <= 0)
-
-                Button("Cancel", role: .cancel, action: onCancel)
             }
+            .buttonStyle(NyxPrimaryButtonStyle())
+            .disabled(code.isEmpty || isLoading || remainingSeconds <= 0)
+
+            Button("Cancel", role: .cancel, action: onCancel)
+                .font(.footnote.weight(.semibold))
+                .frame(maxWidth: .infinity)
         }
-        .navigationTitle("Two-Factor Authentication")
+        .padding(22)
+        .nyxGlass(radius: Nyx.Radius.panel, elevated: true)
         .task {
             while !Task.isCancelled && remainingSeconds > 0 {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)

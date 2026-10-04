@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Avatar+name navigable card replacing the plain `Label` uploader link.
+/// Avatar+name navigable card for the post's creator.
 /// `media.userAvatarUrl` is already a full URL (populated by the backend's
 /// `_with_urls` on the media detail response), unlike a comment's
 /// `userAvatarPath` — no client-side reconstruction needed here.
@@ -10,19 +10,26 @@ struct UploaderRow: View {
     var body: some View {
         if let username = media.username {
             NavigationLink(destination: ProfileView(username: username)) {
-                HStack(spacing: 10) {
-                    AvatarView(urlString: media.userAvatarUrl, fallbackInitial: String((media.displayName ?? username).prefix(1)), size: 40)
+                HStack(spacing: 12) {
+                    AvatarView(urlString: media.userAvatarUrl, fallbackInitial: String((media.displayName ?? username).prefix(1)), size: 42)
+                        .overlay(Circle().strokeBorder(Color.accentColor.opacity(0.6), lineWidth: 1.5).padding(-3))
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(media.displayName ?? username).font(.subheadline.bold())
-                        Text("@\(username)").font(.caption).foregroundStyle(.secondary)
+                        Text(media.displayName ?? username)
+                            .font(.system(.subheadline, design: .rounded).weight(.bold))
+                        Text("@\(username)").font(.caption).foregroundStyle(Nyx.mist)
                     }
                     Spacer()
-                    Image(systemName: "chevron.right").font(.caption2).foregroundStyle(.secondary)
+                    Text("View")
+                        .font(.system(.caption, design: .rounded).weight(.bold))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.accentColor.opacity(0.14), in: Capsule())
+                        .foregroundStyle(Color.accentColor)
                 }
-                .padding(10)
-                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(NyxPressStyle(scale: 0.98))
+            .accessibilityLabel("Uploaded by \(media.displayName ?? username)")
         }
     }
 }

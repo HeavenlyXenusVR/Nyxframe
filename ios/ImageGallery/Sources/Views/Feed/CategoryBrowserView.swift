@@ -20,6 +20,7 @@ struct CategoryBrowserView: View {
             }
         }
         .navigationTitle("Categories")
+        .nyxScreen()
         .overlay {
             if isLoading { ProgressView() }
         }
@@ -41,25 +42,15 @@ struct CategoryMediaView: View {
 
     @StateObject private var viewModel = FeedViewModel()
     @EnvironmentObject private var session: SessionStore
-    private var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: Appearance.gridColumnMinWidth(session.currentUser?.userSettings?.gridDensity)), spacing: Appearance.gridSpacing(session.currentUser?.userSettings?.columnGap))]
-    }
 
     var body: some View {
         ScrollView {
             if let errorMessage = viewModel.errorMessage {
                 Text(errorMessage).foregroundStyle(.red).padding()
             }
-            LazyVGrid(columns: columns, spacing: Appearance.gridSpacing(session.currentUser?.userSettings?.columnGap)) {
-                ForEach(viewModel.items) { item in
-                    NavigationLink(destination: MediaDetailView(mediaId: item.id)) {
-                        MediaCard(item: item)
-                    }
-                    .buttonStyle(.plain)
-                    .task { await viewModel.loadMoreIfNeeded(currentItem: item) }
-                }
+            NyxMediaGrid(items: viewModel.items) { item in
+                await viewModel.loadMoreIfNeeded(currentItem: item)
             }
-            .padding(.horizontal)
 
             if viewModel.items.isEmpty && !viewModel.isLoading {
                 ContentUnavailableCompat(title: "No media in \(title) yet", systemImage: "photo.on.rectangle.angled")
@@ -67,6 +58,7 @@ struct CategoryMediaView: View {
             }
         }
         .navigationTitle(title)
+        .nyxScreen()
         .refreshable { await viewModel.loadInitial() }
         .task {
             viewModel.categoryId = categoryId

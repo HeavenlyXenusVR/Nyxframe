@@ -45,6 +45,7 @@ struct UserListView: View {
             }
         }
         .navigationTitle(kind.title)
+        .nyxScreen()
         .overlay {
             if isLoading && users.isEmpty { ProgressView() }
         }

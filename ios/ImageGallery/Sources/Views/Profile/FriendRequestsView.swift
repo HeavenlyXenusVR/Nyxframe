@@ -36,6 +36,7 @@ struct FriendRequestsView: View {
             }
         }
         .navigationTitle("Friend Requests")
+        .nyxScreen()
         .refreshable { await viewModel.load() }
         .task { await viewModel.load() }
         .overlay {

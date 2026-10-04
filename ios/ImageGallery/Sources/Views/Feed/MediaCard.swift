@@ -2,8 +2,12 @@ import SwiftUI
 
 struct MediaCard: View {
     let item: MediaItem
+    /// Width / height. Masonry grids pass the tile's rhythm ratio (see
+    /// `GridRhythm`); nil falls back to the viewer's `card_aspect_ratio`.
+    var aspectRatio: CGFloat? = nil
 
     @EnvironmentObject private var session: SessionStore
+    @Environment(\.nyxTabIsActive) private var tabIsActive
     @StateObject private var previewController = GridPreviewController()
     @State private var isOnScreen = false
 
@@ -27,7 +31,9 @@ struct MediaCard: View {
     // than autoplaying WITH sound in a scrolling feed, which every mobile
     // browser blocks outright and would be startling even where allowed.
     private var previewMuted: Bool { settings?.mutedPreviews ?? true }
-    private var shouldShowLivePreview: Bool { previewEligible && previewMuted && isOnScreen }
+    // tabIsActive: a background tab's cards never get onDisappear, so
+    // without it their previews would keep playing out of sight.
+    private var shouldShowLivePreview: Bool { previewEligible && previewMuted && isOnScreen && tabIsActive }
 
     private var previewURL: URL? {
         guard let urlString = item.url, var components = URLComponents(string: urlString) else { return nil }
@@ -41,19 +47,22 @@ struct MediaCard: View {
     // (see CardInfoDisplay's doc comment). Below/minimal render as normal
     // flow content under the thumbnail; overlay renders inside the
     // thumbnail's own bounds with a scrim; hidden renders neither.
-    private var infoDisplay: CardInfoDisplay { CardInfoDisplay(settings?.cardInfoDisplay) }
+    // Nocturne defaults to overlay (title over a scrim) when the viewer
+    // hasn't chosen -- the staggered grid reads as a wall of images, and
+    // a caption row under every tile breaks that up.
+    private var infoDisplay: CardInfoDisplay { CardInfoDisplay(settings?.cardInfoDisplay ?? CardInfoDisplay.overlay.rawValue) }
     private var borderStyle: MediaBorderStyle { MediaBorderStyle(settings?.mediaBorderStyle) }
     private var cornerRadius: CGFloat {
         switch borderStyle {
-        case .soft, .crisp: return 4
-        default: return Metrics.Radius.md
+        case .soft, .crisp: return 6
+        default: return Nyx.Radius.card - 4
         }
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Color.clear
-                .aspectRatio(Appearance.cardAspectRatio(settings?.cardAspectRatio), contentMode: .fit)
+                .aspectRatio(aspectRatio ?? Appearance.cardAspectRatio(settings?.cardAspectRatio), contentMode: .fit)
                 .overlay(thumbnail)
                 .overlay { if shouldShowLivePreview, let player = previewController.player {
                     GridPreviewVideoView(player: player)
@@ -65,8 +74,12 @@ struct MediaCard: View {
                 .overlay(alignment: .bottom) { if infoDisplay == .overlay { footer(overlayStyle: true) } }
                 .overlay(alignment: .topTrailing) { kindBadge }
                 .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.08), lineWidth: 1)
+                )
                 .modifier(MediaBorderModifier(style: borderStyle, cornerRadius: cornerRadius))
-                .cardShadow()
+                .shadow(color: .black.opacity(0.18), radius: 10, x: 0, y: 6)
 
             if infoDisplay == .below || infoDisplay == .minimal {
                 footer(overlayStyle: false)
@@ -106,11 +119,11 @@ struct MediaCard: View {
     // the whole card. Overlay mode only.
     private var scrim: some View {
         LinearGradient(
-            colors: [.black.opacity(0.65), .black.opacity(0)],
+            colors: [.black.opacity(0.7), .black.opacity(0)],
             startPoint: .bottom,
             endPoint: .top
         )
-        .frame(height: 56)
+        .frame(height: 64)
         .allowsHitTesting(false)
     }
 
@@ -119,8 +132,8 @@ struct MediaCard: View {
         if infoDisplay != .hidden {
             HStack(alignment: .lastTextBaseline, spacing: 6) {
                 Text(item.title?.nilIfEmpty ?? "Untitled")
-                    .font(.caption)
-                    .fontWeight(.semibold)
+                    .font(.system(.caption, design: .rounded))
+                    .fontWeight(.bold)
                     .lineLimit(1)
                 // "minimal" drops the stat, same as web's
                 // .gallery-info-minimal .media-copy p { display: none }.
@@ -139,8 +152,8 @@ struct MediaCard: View {
             // single type, and mixing Color with HierarchicalShapeStyle
             // across a ternary's branches wouldn't type-check.
             .foregroundStyle(overlayStyle ? Color.white.opacity(0.9) : Color.primary)
-            .padding(.horizontal, overlayStyle ? 8 : 2)
-            .padding(.bottom, overlayStyle ? 6 : 0)
+            .padding(.horizontal, overlayStyle ? 10 : 4)
+            .padding(.bottom, overlayStyle ? 9 : 0)
         }
     }
 
@@ -155,28 +168,28 @@ struct MediaCard: View {
 
     private func badgeIcon(_ systemImage: String) -> some View {
         Image(systemName: systemImage)
-            .font(.caption2)
-            .padding(6)
-            .background(.black.opacity(0.55), in: Circle())
+            .font(.system(size: 10, weight: .bold))
+            .frame(width: 24, height: 24)
+            .background(.ultraThinMaterial, in: Circle())
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.2), lineWidth: 1))
             .foregroundStyle(.white)
-            .padding(6)
+            .padding(8)
     }
 
     @ViewBuilder
     private var thumbnail: some View {
         if item.locked == true {
-            Rectangle()
-                .fill(.secondary.opacity(0.3))
-                .overlay(Image(systemName: "eye.slash").foregroundStyle(.secondary))
+            LinearGradient(colors: [Nyx.glow, Nyx.glowAlt], startPoint: .topLeading, endPoint: .bottomTrailing)
+                .overlay(Image(systemName: "eye.slash.fill").foregroundStyle(.white.opacity(0.8)))
         } else if let urlString = item.thumbUrl, let url = URL(string: urlString) {
             CachedAsyncImage(url: url, diagnostics: ImageLoadDiagnosticsContext(mediaId: item.id, mediaKind: item.mediaKind ?? "", context: "feed-card")) { phase in
                 switch phase {
                 case .success(let image):
                     image.resizable().scaledToFill()
                 case .failure:
-                    Rectangle().fill(.secondary.opacity(0.2)).overlay(Image(systemName: "photo").foregroundStyle(.secondary))
+                    Rectangle().fill(Nyx.glow.opacity(0.35)).overlay(Image(systemName: "photo").foregroundStyle(.secondary))
                 default:
-                    Rectangle().fill(.secondary.opacity(0.1))
+                    Rectangle().fill(Nyx.glow.opacity(0.25))
                 }
             }
         } else {

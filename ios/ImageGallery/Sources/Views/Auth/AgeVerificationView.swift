@@ -50,6 +50,7 @@ struct AgeVerificationView: View {
                 }
             }
             .navigationTitle("Age Verification")
+            .nyxScreen()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

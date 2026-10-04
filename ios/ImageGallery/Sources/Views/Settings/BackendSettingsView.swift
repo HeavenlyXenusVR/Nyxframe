@@ -44,6 +44,7 @@ struct BackendSettingsView: View {
             }
         }
         .navigationTitle("Backend")
+        .nyxScreen()
     }
 
     private func save() {
