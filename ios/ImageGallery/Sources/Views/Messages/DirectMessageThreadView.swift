@@ -40,7 +40,6 @@ struct DirectMessageThreadView: View {
                 Text(errorMessage).font(.footnote).foregroundStyle(.red).padding(.horizontal)
             }
 
-            Divider()
             MessageComposer(text: $draft, isSending: viewModel.isSending) {
                 let body = draft
                 draft = ""
@@ -52,6 +51,8 @@ struct DirectMessageThreadView: View {
             }
         }
         .navigationTitle(displayName)
+        .nyxScreen()
+        .hidesDock()
         .navigationBarTitleDisplayMode(.inline)
         .task {
             await viewModel.load()

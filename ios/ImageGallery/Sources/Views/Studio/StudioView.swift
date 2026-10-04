@@ -9,6 +9,7 @@ struct StudioView: View {
     @State private var downloadURL: URL?
     @State private var showingDownloadShare = false
     @EnvironmentObject private var session: SessionStore
+    @EnvironmentObject private var quickActionRouter: QuickActionRouter
 
     private var columns: [GridItem] {
         [GridItem(.adaptive(minimum: Appearance.gridColumnMinWidth(session.currentUser?.userSettings?.gridDensity, default_: 150)), spacing: Appearance.gridSpacing(session.currentUser?.userSettings?.columnGap))]
@@ -50,6 +51,7 @@ struct StudioView: View {
             .padding()
         }
         .navigationTitle("Studio")
+        .nyxScreen()
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button(viewModel.isSelecting ? "Done" : "Select") {
@@ -66,7 +68,9 @@ struct StudioView: View {
                     systemImage: "photo.stack",
                     hint: "Posts you publish show up here, with their stats and owner controls."
                 ) {
-                    NavigationLink("Upload your first post") { UploadView() }
+                    // Opens the shell's Create sheet rather than pushing a
+                    // second, sheet-less copy of the upload screen here.
+                    Button("Upload your first post") { quickActionRouter.pendingDestination = .upload }
                         .buttonStyle(.borderedProminent)
                 }
             }

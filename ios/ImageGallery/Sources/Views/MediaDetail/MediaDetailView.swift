@@ -33,55 +33,35 @@ struct MediaDetailView: View {
         _viewModel = StateObject(wrappedValue: MediaDetailViewModel(mediaId: mediaId))
     }
 
+    @Environment(\.nyxTabIsActive) private var tabIsActive
+
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 18) {
                 if let media = viewModel.media {
                     mediaViewer(media)
+                        .padding(.horizontal, 12)
 
-                    Text(media.title?.nilIfEmpty ?? "Untitled")
-                        .font(.title2).bold()
-
-                    UploaderRow(media: media)
-
-                    if let description = media.description, !description.isEmpty {
-                        Text(description)
-                    }
-
-                    MediaActionBar(
-                        media: media,
-                        isTogglingLike: viewModel.isTogglingLike,
-                        isTogglingBookmark: viewModel.isTogglingBookmark,
-                        onLike: { Task { await viewModel.toggleLike() } },
-                        onBookmark: { Task { await viewModel.toggleBookmark() } },
-                        onReport: { showingReport = true },
-                        onOpenOriginal: { openOriginal(media) }
-                    )
-
-                    ReactionTray(reactions: viewModel.reactions) { emoji in
-                        Task { await viewModel.react(emoji: emoji) }
-                    }
-
-                    if session.currentUser != nil {
-                        PersonalTagsSection(viewModel: viewModel)
-                    }
-
-                    Divider()
-                    CommentsSection(viewModel: viewModel)
-
-                    Divider()
-                    Label("More like this", systemImage: "square.grid.2x2").font(.headline)
-                    SimilarMediaRail(items: viewModel.similar)
+                    infoPanel(media)
+                    commentsPanel
+                    similarSection
                 } else if viewModel.isLoading {
-                    ProgressView().padding(.top, 80)
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 120)
                 } else if let errorMessage = viewModel.errorMessage {
                     InlineErrorView(message: errorMessage) { await viewModel.load() }
+                        .padding(.top, 40)
                 }
             }
-            .padding()
+            .padding(.top, 8)
+            .padding(.bottom, 32)
         }
-        .navigationTitle(viewModel.media?.title ?? "Media")
+        .background(ambientBackdrop)
+        .hidesDock()
+        .navigationTitle(viewModel.media?.title ?? "")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden, for: .navigationBar)
         .task {
             await viewModel.load()
             setUpVideoControllerIfNeeded()
@@ -129,8 +109,130 @@ struct MediaDetailView: View {
                 Task { await loadPlaybackExtras(for: media) }
             }
         }
+        // The shell keeps other tabs alive without ever calling
+        // onDisappear on them, so leaving this tab has to pause playback
+        // explicitly -- otherwise a video keeps playing, with sound, from
+        // a tab nobody is looking at.
+        .onChange(of: tabIsActive) { isActive in
+            if !isActive { videoController?.pause() }
+        }
         .onAppear { setUpVideoControllerIfNeeded() }
         .onDisappear { videoController?.pause() }
+    }
+
+    // MARK: Nocturne layout
+
+    /// "Ambient mode": the post's own thumbnail, blown up and blurred into
+    /// a glow behind the page, so every post tints the sky it sits on.
+    private var ambientBackdrop: some View {
+        ZStack(alignment: .top) {
+            NyxBackdrop(showsStars: false)
+            if let urlString = viewModel.media?.thumbUrl, viewModel.media?.locked != true, let url = URL(string: urlString) {
+                CachedAsyncImage(url: url) { phase in
+                    if case .success(let image) = phase {
+                        image.resizable().scaledToFill()
+                    } else {
+                        Color.clear
+                    }
+                }
+                .frame(height: 560)
+                .frame(maxWidth: .infinity)
+                .clipped()
+                .blur(radius: 70)
+                .opacity(0.55)
+                .mask(LinearGradient(colors: [.black, .black.opacity(0.6), .clear], startPoint: .top, endPoint: .bottom))
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+            }
+        }
+        .ignoresSafeArea()
+    }
+
+    private func infoPanel(_ media: MediaItem) -> some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                if let eyebrow = metaLine(media) {
+                    Text(eyebrow.uppercased())
+                        .font(Nyx.eyebrow)
+                        .tracking(1.2)
+                        .foregroundStyle(Color.accentColor)
+                }
+                Text(media.title?.nilIfEmpty ?? "Untitled")
+                    .font(Nyx.display(26))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            UploaderRow(media: media)
+
+            MediaActionBar(
+                media: media,
+                isTogglingLike: viewModel.isTogglingLike,
+                isTogglingBookmark: viewModel.isTogglingBookmark,
+                onLike: { Task { await viewModel.toggleLike() } },
+                onBookmark: { Task { await viewModel.toggleBookmark() } },
+                onReport: { showingReport = true },
+                onOpenOriginal: { openOriginal(media) }
+            )
+
+            if let description = media.description, !description.isEmpty {
+                Text(description)
+                    .font(.callout)
+                    .foregroundStyle(Color.primary.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if let tags = media.tags, !tags.isEmpty {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(tags, id: \.self) { tag in
+                            Text("#\(tag)")
+                                .font(.system(.caption, design: .rounded).weight(.semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(Color.accentColor.opacity(0.12), in: Capsule())
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                }
+            }
+
+            ReactionTray(reactions: viewModel.reactions) { emoji in
+                Task { await viewModel.react(emoji: emoji) }
+            }
+
+            if session.currentUser != nil {
+                PersonalTagsSection(viewModel: viewModel)
+            }
+        }
+        .padding(18)
+        .nyxGlass(radius: Nyx.Radius.panel)
+        .padding(.horizontal, 12)
+    }
+
+    private var commentsPanel: some View {
+        CommentsSection(viewModel: viewModel)
+            .padding(18)
+            .nyxGlass(radius: Nyx.Radius.panel)
+            .padding(.horizontal, 12)
+    }
+
+    @ViewBuilder
+    private var similarSection: some View {
+        if !viewModel.similar.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                NyxSectionHeader(eyebrow: "Constellation", title: "More like this")
+                SimilarMediaRail(items: viewModel.similar)
+            }
+            .padding(.top, 6)
+        }
+    }
+
+    /// "Wallpapers · 3 days ago", from whichever of the two is known.
+    private func metaLine(_ media: MediaItem) -> String? {
+        var parts: [String] = []
+        if let category = media.categoryName?.nilIfEmpty { parts.append(category) }
+        if media.createdAt != nil { parts.append(DateFormatting.relative(media.createdAt)) }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     /// Real HLS instead of a single Range-served file: AVPlayer has native
@@ -266,57 +368,60 @@ struct MediaDetailView: View {
     @ViewBuilder
     private func mediaViewer(_ media: MediaItem) -> some View {
         if media.locked == true {
-            VStack(spacing: 12) {
-                Image(systemName: "lock.fill").font(.system(size: 36))
-                Text("Age verification required for this 18+ post.")
+            VStack(spacing: 14) {
+                Image(systemName: "moon.haze.fill")
+                    .font(.system(size: 40))
+                    .foregroundStyle(Color.accentColor)
+                Text("This 18+ post is veiled until you verify your age.")
+                    .font(.callout)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(Nyx.mist)
                 Button("Verify Age") { showingAgeVerification = true }
+                    .buttonStyle(NyxPrimaryButtonStyle())
+                    .frame(maxWidth: 220)
             }
-            .frame(maxWidth: .infinity, minHeight: 220)
-            .softCard()
+            .padding(24)
+            .frame(maxWidth: .infinity, minHeight: 260)
+            .nyxGlass(radius: Nyx.Radius.hero)
         } else if media.isVideo, let player = videoController {
-            ZStack(alignment: .topTrailing) {
-                AuthenticatedVideoPlayer(controller: player)
-                    .frame(height: 260)
-                    .clipShape(RoundedRectangle(cornerRadius: Metrics.Radius.md, style: .continuous))
-                    .cardShadow()
-                HStack(spacing: 4) {
-                    qualityMenu
-                    expandButton
+            AuthenticatedVideoPlayer(controller: player)
+                .aspectRatio(16 / 9, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: Nyx.Radius.panel, style: .continuous))
+                .overlay(alignment: .topTrailing) {
+                    HStack(spacing: 6) {
+                        qualityMenu
+                        expandButton
+                    }
+                    .padding(10)
                 }
-            }
+                .shadow(color: .black.opacity(0.35), radius: 24, x: 0, y: 14)
         } else if let urlString = media.previewUrl?.nilIfEmpty ?? media.url, let url = URL(string: urlString) {
             // `previewUrl` is a server-resized/recompressed WEBP (capped at
             // 1920px), not the raw original `url` — this inline viewer is
-            // capped to 480pt tall anyway, so fetching the full multi-MB
+            // capped in height anyway, so fetching the full multi-MB
             // original here just makes the first paint slow for no visible
             // benefit. `FullScreenMediaView` (reached via `expandButton`
             // below) still uses the true original for full quality once the
             // viewer explicitly asks for it.
-            ZStack(alignment: .topTrailing) {
-                ZoomableAsyncImage(url: url, diagnostics: ImageLoadDiagnosticsContext(mediaId: media.id, mediaKind: media.mediaKind ?? "", context: "media-detail"))
-                // scaledToFit alone is safe from the grid-overlap class of bug
-                // (single image, not competing with siblings for layout), but an
-                // extreme portrait aspect ratio could still stretch to fill most
-                // of the screen — cap it so the rest of the page stays reachable.
-                .frame(maxHeight: 480)
+            ZoomableAsyncImage(url: url, diagnostics: ImageLoadDiagnosticsContext(mediaId: media.id, mediaKind: media.mediaKind ?? "", context: "media-detail"))
+                // An extreme portrait aspect ratio could otherwise stretch
+                // to fill most of the screen — cap it so the rest of the
+                // page stays reachable.
+                .frame(maxHeight: 540)
+                .frame(maxWidth: .infinity)
                 .clipped()
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .shadow(color: .black.opacity(0.15), radius: 8, x: 0, y: 4)
-                expandButton
-            }
+                .clipShape(RoundedRectangle(cornerRadius: Nyx.Radius.panel, style: .continuous))
+                .overlay(alignment: .topTrailing) {
+                    expandButton.padding(10)
+                }
+                .shadow(color: .black.opacity(0.35), radius: 24, x: 0, y: 14)
         }
     }
 
     private var expandButton: some View {
-        Button {
+        NyxOrbButton(systemImage: "arrow.up.left.and.arrow.down.right", label: "View fullscreen") {
             showingFullScreen = true
-        } label: {
-            Image(systemName: "arrow.up.left.and.arrow.down.right")
-                .padding(8)
-                .background(.ultraThinMaterial, in: Circle())
-                .foregroundStyle(.white)
         }
-        .padding(8)
-        .accessibilityLabel("View fullscreen")
+        .foregroundStyle(.white)
     }
 }

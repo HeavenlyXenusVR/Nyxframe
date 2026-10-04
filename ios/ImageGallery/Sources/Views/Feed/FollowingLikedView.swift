@@ -11,15 +11,16 @@ struct FollowingLikedView: View {
         case liked = "Liked"
     }
 
-    @State private var mode: Mode = .following
+    @State private var mode: Mode
     @State private var items: [MediaItem] = []
     @State private var isLoading = true
     @State private var errorMessage: String?
     @EnvironmentObject private var session: SessionStore
     @EnvironmentObject private var quickActionRouter: QuickActionRouter
 
-    private var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: Appearance.gridColumnMinWidth(session.currentUser?.userSettings?.gridDensity)), spacing: Appearance.gridSpacing(session.currentUser?.userSettings?.columnGap))]
+
+    init(mode: Mode = .following) {
+        _mode = State(initialValue: mode)
     }
 
     var body: some View {
@@ -35,15 +36,7 @@ struct FollowingLikedView: View {
                 InlineErrorView(message: errorMessage) { await load() }
             }
 
-            LazyVGrid(columns: columns, spacing: Appearance.gridSpacing(session.currentUser?.userSettings?.columnGap)) {
-                ForEach(items) { item in
-                    NavigationLink(destination: MediaDetailView(mediaId: item.id)) {
-                        MediaCard(item: item)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal)
+            NyxMediaGrid(items: items)
 
             if items.isEmpty && !isLoading {
                 ContentUnavailableCompat(
@@ -77,6 +70,7 @@ struct FollowingLikedView: View {
             }
         }
         .navigationTitle(mode.rawValue)
+        .nyxScreen()
         .refreshable { await load() }
         .task { await load() }
         .overlay {

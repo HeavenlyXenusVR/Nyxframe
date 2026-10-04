@@ -1,23 +1,31 @@
 import SwiftUI
 
-/// Placeholder tiles shown while the Discover grid's first page is loading,
-/// standing in for `MediaCard` so the layout doesn't jump from an empty
-/// scroll view to a populated grid.
+/// Placeholder tiles shown while a grid's first page is loading, in the
+/// same staggered rhythm as `MasonryGrid` so the layout doesn't jump when
+/// real tiles arrive.
 struct SkeletonGridView: View {
-    var columns: [GridItem]
-    var count: Int = 12
+    var lanes: Int = 2
+    var count: Int = 10
 
     @State private var pulse = false
 
+    private static let heights: [CGFloat] = [1.25, 1, 1.33, 1.5, 1, 0.8]
+
     var body: some View {
-        LazyVGrid(columns: columns, spacing: 12) {
-            ForEach(0..<count, id: \.self) { _ in
-                RoundedRectangle(cornerRadius: Metrics.Radius.md, style: .continuous)
-                    .fill(.secondary.opacity(pulse ? 0.18 : 0.08))
-                    .aspectRatio(1, contentMode: .fit)
+        HStack(alignment: .top, spacing: 12) {
+            ForEach(0..<max(1, lanes), id: \.self) { lane in
+                VStack(spacing: 12) {
+                    ForEach(0..<(count / max(1, lanes)), id: \.self) { row in
+                        RoundedRectangle(cornerRadius: Nyx.Radius.card, style: .continuous)
+                            .fill(Nyx.glow.opacity(pulse ? 0.45 : 0.2))
+                            .aspectRatio(1 / Self.heights[(lane * 3 + row) % Self.heights.count], contentMode: .fit)
+                    }
+                }
+                .frame(maxWidth: .infinity)
             }
         }
-        .padding(.horizontal)
+        .padding(.horizontal, 16)
+        .accessibilityLabel("Loading")
         .onAppear {
             withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
                 pulse = true

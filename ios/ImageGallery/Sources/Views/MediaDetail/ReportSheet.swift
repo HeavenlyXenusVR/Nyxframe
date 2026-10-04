@@ -25,6 +25,7 @@ struct ReportSheet: View {
                 }
             }
             .navigationTitle("Report")
+            .nyxScreen()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

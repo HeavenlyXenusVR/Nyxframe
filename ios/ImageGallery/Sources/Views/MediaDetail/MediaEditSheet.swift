@@ -78,6 +78,7 @@ struct MediaEditSheet: View {
                 }
             }
             .navigationTitle("Edit Post")
+            .nyxScreen()
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

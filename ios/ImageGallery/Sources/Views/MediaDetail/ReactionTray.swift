@@ -18,12 +18,23 @@ struct ReactionTray: View {
                         bounce(emoji)
                         onReact(emoji)
                     } label: {
-                        Text(count > 0 ? "\(emoji) \(count)" : emoji)
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(active ? Color.accentColor.opacity(0.25) : Color.secondary.opacity(0.12))
-                            .clipShape(Capsule())
-                            .scaleEffect(bounceEmoji == emoji ? 1.3 : 1.0)
+                        HStack(spacing: 4) {
+                            Text(emoji)
+                            if count > 0 {
+                                Text("\(count)")
+                                    .font(.system(.caption, design: .rounded).weight(.bold))
+                                    .foregroundStyle(active ? Color.accentColor : Nyx.mist)
+                            }
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(
+                            Capsule().fill(active ? Color.accentColor.opacity(0.2) : Color.primary.opacity(0.05))
+                        )
+                        .overlay(
+                            Capsule().strokeBorder(active ? Color.accentColor.opacity(0.6) : Nyx.hairline, lineWidth: 1)
+                        )
+                        .scaleEffect(bounceEmoji == emoji ? 1.3 : 1.0)
                     }
                     .buttonStyle(.plain)
                 }

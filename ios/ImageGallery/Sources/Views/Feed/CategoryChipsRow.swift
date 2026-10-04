@@ -1,10 +1,13 @@
 import SwiftUI
 
-/// Horizontal category picker for the Discover feed — an "All" chip plus one
+/// Category picker for the Explore filter shelf -- an "All" chip plus one
 /// per top-level category, ending in a "More" chip that opens the full
 /// `CategoryBrowserView` (which also lists subcategories). Selecting a chip
 /// here only ever sets `categoryId`; picking a specific subcategory still
-/// requires drilling into "More", same as before this component existed.
+/// requires drilling into "More".
+///
+/// Lays its chips out inline (no scroll view of its own) so the shelf can
+/// put it in the same horizontal scroll as the sort menu.
 struct CategoryChipsRow: View {
     @Binding var selectedCategoryId: Int?
     var onSelect: (Int?) -> Void
@@ -12,44 +15,32 @@ struct CategoryChipsRow: View {
     @State private var categories: [CategorySummary] = []
 
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
-                chip(title: "All", isSelected: selectedCategoryId == nil) {
-                    onSelect(nil)
-                }
-                ForEach(categories) { category in
-                    chip(title: category.name, isSelected: selectedCategoryId == category.id) {
-                        onSelect(category.id)
-                    }
-                }
-                NavigationLink(destination: CategoryBrowserView()) {
-                    Label("More", systemImage: "square.grid.3x3")
-                        .font(.footnote.weight(.medium))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(.secondary.opacity(0.12), in: Capsule())
-                        .foregroundStyle(.secondary)
+        HStack(spacing: 8) {
+            NyxChip(title: "All", isSelected: selectedCategoryId == nil) {
+                onSelect(nil)
+            }
+            ForEach(categories) { category in
+                NyxChip(title: category.name, isSelected: selectedCategoryId == category.id) {
+                    Haptics.light()
+                    onSelect(category.id)
                 }
             }
-            .padding(.horizontal)
+            NavigationLink(destination: CategoryBrowserView()) {
+                HStack(spacing: 5) {
+                    Image(systemName: "square.grid.3x3").imageScale(.small)
+                    Text("More")
+                }
+                .font(.system(.footnote, design: .rounded).weight(.semibold))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(Capsule().strokeBorder(Nyx.hairline, lineWidth: 1))
+                .foregroundStyle(Nyx.mist)
+            }
         }
         .task {
             if categories.isEmpty {
                 categories = (try? await GalleryAPIClient.shared.categories()) ?? []
             }
         }
-    }
-
-    private func chip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.footnote.weight(.medium))
-                .lineLimit(1)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .background(isSelected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(Color.secondary.opacity(0.12)), in: Capsule())
-                .foregroundStyle(isSelected ? Color.white : Color.primary)
-        }
-        .buttonStyle(.plain)
     }
 }

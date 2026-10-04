@@ -33,7 +33,7 @@ struct SettingsView: View {
     @State private var discordWebhookUrl = ""
     @State private var cardAspectRatio = "free"
     @State private var mediaBorderStyle = "none"
-    @State private var cardInfoDisplay = "below"
+    @State private var cardInfoDisplay = "overlay"
     @State private var columnGap = "normal"
     @State private var galleryFont = "system"
     @State private var profileHeaderStyle = "solid"
@@ -458,6 +458,7 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("Settings")
+        .nyxScreen()
         .task {
             await viewModel.loadAll()
             loadAppearanceFromCurrentUser()
@@ -527,7 +528,7 @@ struct SettingsView: View {
         discordWebhookUrl = settings.discordWebhookUrl ?? ""
         cardAspectRatio = settings.cardAspectRatio ?? "free"
         mediaBorderStyle = settings.mediaBorderStyle ?? "none"
-        cardInfoDisplay = settings.cardInfoDisplay ?? "below"
+        cardInfoDisplay = settings.cardInfoDisplay ?? "overlay"
         columnGap = settings.columnGap ?? "normal"
         galleryFont = settings.galleryFont ?? "system"
         profileHeaderStyle = settings.profileHeaderStyle ?? "solid"

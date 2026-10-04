@@ -4,18 +4,24 @@ import Foundation
 import UIKit
 
 /// Bridges UIKit home-screen quick actions (handled by `AppDelegate`, which
-/// has no direct line to SwiftUI's view state) into the tab selection
-/// `RootTabView` owns. `AppDelegate` posts into `QuickActionRouter.shared`;
-/// `RootTabView` observes it via the environment.
+/// has no direct line to SwiftUI's view state) into the destination
+/// `AppShellView` owns. `AppDelegate` posts into `QuickActionRouter.shared`;
+/// `AppShellView` observes it via the environment. Views inside the shell
+/// use it too, to jump to another dock destination instead of pushing a
+/// second copy of it onto their own stack.
 @MainActor
 final class QuickActionRouter: ObservableObject {
     static let shared = QuickActionRouter()
 
-    /// Tab indices matching `RootTabView`'s `.tag` values.
-    enum Destination: Int {
-        case discover = 0
-        case messages = 1
-        case upload = 3
+    /// Where a quick action (or an in-app shortcut) lands. Upload isn't a
+    /// dock tab any more -- it opens the Create sheet over whatever is on
+    /// screen -- and Messages lands on the Inbox's Messages segment.
+    enum Destination: Equatable {
+        case discover
+        case messages
+        case activity
+        case you
+        case upload
     }
 
     @Published var pendingDestination: Destination?

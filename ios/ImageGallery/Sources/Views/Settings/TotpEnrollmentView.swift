@@ -54,6 +54,7 @@ struct TotpEnrollmentView: View {
                 }
             }
             .navigationTitle("Two-Factor Setup")
+            .nyxScreen()
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Close") { dismiss() }

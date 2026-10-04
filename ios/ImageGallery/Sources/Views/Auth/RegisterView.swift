@@ -23,49 +23,60 @@ struct RegisterView: View {
     private var isPasswordValid: Bool { password.count >= 8 }
 
     var body: some View {
-        Form {
-            Section {
-                TextField("Username", text: $username)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                if !trimmedUsername.isEmpty && !isUsernameValid {
-                    Text("3-40 characters: letters, numbers, \".\", \"_\", \"-\" only.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-                TextField("Display name (optional)", text: $displayName)
-                TextField("Email (optional)", text: $email)
-                    .textInputAutocapitalization(.never)
-                    .keyboardType(.emailAddress)
-                SecureField("Password", text: $password)
-                if !password.isEmpty && !isPasswordValid {
-                    Text("At least 8 characters.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Join the night shift")
+                .font(.system(.title2, design: .rounded).weight(.bold))
+            Text("One account for the web gallery and this app.")
+                .font(.subheadline)
+                .foregroundStyle(Nyx.mist)
+                .padding(.bottom, 4)
+
+            NyxField(systemImage: "at", placeholder: "Username", text: $username, contentType: .username)
+            if !trimmedUsername.isEmpty && !isUsernameValid {
+                hint("3-40 characters: letters, numbers, \".\", \"_\", \"-\" only.")
+            }
+            NyxField(systemImage: "person", placeholder: "Display name (optional)", text: $displayName, contentType: .nickname)
+            NyxField(systemImage: "envelope", placeholder: "Email (optional)", text: $email, contentType: .emailAddress, keyboard: .emailAddress)
+            NyxField(systemImage: "key", placeholder: "Password", text: $password, isSecure: true, contentType: .newPassword)
+            if !password.isEmpty && !isPasswordValid {
+                hint("At least 8 characters.")
             }
 
             if let errorMessage {
-                Section {
-                    Text(errorMessage).foregroundStyle(.red)
-                }
+                NyxFormError(message: errorMessage)
             }
 
-            Section {
-                Button {
-                    Task { await register() }
-                } label: {
-                    if isLoading {
-                        ProgressView()
-                    } else {
-                        Text("Create Account").frame(maxWidth: .infinity)
-                    }
-                }
-                .disabled(!isUsernameValid || !isPasswordValid || isLoading)
-
-                Button("Already have an account? Log in") {
-                    showingRegister = false
+            Button {
+                Task { await register() }
+            } label: {
+                if isLoading {
+                    ProgressView().tint(.white)
+                } else {
+                    Text("Create Account")
                 }
             }
+            .buttonStyle(NyxPrimaryButtonStyle())
+            .disabled(!isUsernameValid || !isPasswordValid || isLoading)
+            .padding(.top, 4)
+
+            Button {
+                showingRegister = false
+            } label: {
+                (Text("Already have an account? ").foregroundColor(Nyx.mist) + Text("Log in").foregroundColor(.accentColor).bold())
+                    .font(.footnote)
+                    .frame(maxWidth: .infinity)
+            }
+            .padding(.top, 2)
         }
+        .padding(22)
+        .nyxGlass(radius: Nyx.Radius.panel, elevated: true)
+    }
+
+    private func hint(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(Nyx.mist)
+            .padding(.leading, 4)
     }
 
     private func register() async {

@@ -53,6 +53,7 @@ struct CollectionsListView: View {
             }
         }
         .navigationTitle("Collections")
+        .nyxScreen()
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Toggle("Mine", isOn: $showMineOnly).toggleStyle(.button)
@@ -154,26 +155,16 @@ struct CollectionDetailView: View {
     @State private var showingDownloadShare = false
     @EnvironmentObject private var session: SessionStore
 
-    private var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: Appearance.gridColumnMinWidth(session.currentUser?.userSettings?.gridDensity, default_: 100)), spacing: Appearance.gridSpacing(session.currentUser?.userSettings?.columnGap))]
-    }
 
     var body: some View {
         ScrollView {
             if let errorMessage {
                 Text(errorMessage).foregroundStyle(.red).padding()
             }
-            LazyVGrid(columns: columns, spacing: Appearance.gridSpacing(session.currentUser?.userSettings?.columnGap)) {
-                ForEach(media) { item in
-                    NavigationLink(destination: MediaDetailView(mediaId: item.id)) {
-                        MediaCard(item: item)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding()
+            NyxMediaGrid(items: media)
         }
         .navigationTitle(collection?.name ?? "Collection")
+        .nyxScreen()
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {

@@ -71,6 +71,7 @@ struct EditProfileView: View {
             }
         }
         .navigationTitle("Edit Profile")
+        .nyxScreen()
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Button {

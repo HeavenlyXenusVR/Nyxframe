@@ -7,9 +7,6 @@ struct TrendingView: View {
     @State private var errorMessage: String?
     @EnvironmentObject private var session: SessionStore
 
-    private var columns: [GridItem] {
-        [GridItem(.adaptive(minimum: Appearance.gridColumnMinWidth(session.currentUser?.userSettings?.gridDensity)), spacing: Appearance.gridSpacing(session.currentUser?.userSettings?.columnGap))]
-    }
 
     var body: some View {
         ScrollView {
@@ -28,15 +25,7 @@ struct TrendingView: View {
                 InlineErrorView(message: errorMessage) { await load() }
             }
 
-            LazyVGrid(columns: columns, spacing: Appearance.gridSpacing(session.currentUser?.userSettings?.columnGap)) {
-                ForEach(items) { item in
-                    NavigationLink(destination: MediaDetailView(mediaId: item.id)) {
-                        MediaCard(item: item)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(.horizontal)
+            NyxMediaGrid(items: items)
 
             if items.isEmpty && !isLoading {
                 // Same reasoning as the web page: the default window is
@@ -62,6 +51,7 @@ struct TrendingView: View {
                 .padding(.top, 8)
         }
         .navigationTitle("Trending")
+        .nyxScreen()
         .refreshable { await load() }
         .task { await load() }
         .overlay {
@@ -93,7 +83,7 @@ struct TrendingView: View {
 /// "Top creators" ranking, shown below the trending grid — same relationship
 /// the web app's TrendingPage.jsx has (a Leaderboard section under the
 /// trending posts). Self-contained fetch/state, same pattern as
-/// `TrendingRailView`.
+/// `SpotlightCarousel`.
 private struct LeaderboardSection: View {
     @State private var entries: [LeaderboardEntry] = []
     @State private var window = "30d"
