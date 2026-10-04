@@ -1224,14 +1224,10 @@ function M.list_media(req)
     -- Postgres only resolves output aliases when they're the *entire*
     -- ORDER BY item, not when nested inside a larger expression (confirmed
     -- live: "column \"like_count\" does not exist") -- so this repeats the
-    -- underlying COUNT(DISTINCT l.user_id) aggregate instead.
-    trending = "m.pinned_at DESC NULLS LAST, (m.views + COUNT(DISTINCT l.user_id) * 3) / POWER(EXTRACT(EPOCH FROM (now() - m.created_at)) / 3600 + 2, 1.5) DESC, m.created_at DESC",
+    -- like-count subquery instead.
+    trending = "m.pinned_at DESC NULLS LAST, (m.views + (SELECT COUNT(DISTINCT lk.user_id) FROM media_likes lk WHERE lk.media_id = m.id) * 3) / POWER(EXTRACT(EPOCH FROM (now() - m.created_at)) / 3600 + 2, 1.5) DESC, m.created_at DESC",
     -- ts_rank against the same text_search column the WHERE clause above
-    -- now actually searches -- m.text_search is safe to reference here
-    -- despite the GROUP BY not listing it: m.id (media_items' primary
-    -- key) IS in GROUP BY, and Postgres treats every other column of the
-    -- same table as functionally dependent on it, so no aggregate/GROUP BY
-    -- is needed for other bare m.* references.
+    -- now actually searches.
     relevance = "ts_rank(m.text_search, plainto_tsquery('english', %s)) DESC, m.pinned_at DESC NULLS LAST, m.created_at DESC",
   })[sort] or "m.pinned_at DESC NULLS LAST, m.created_at DESC"
   -- A text search with the caller's default sort ("new"/unset) reads
@@ -1244,7 +1240,7 @@ function M.list_media(req)
   end
 
   -- Build the full parameter list in call order: 4 leading viewer refs used
-  -- by the SELECT list's CASE expressions + the 2 JOIN viewer refs, then the
+  -- by the SELECT list's CASE expressions + the 2 liked/bookmarked viewer refs, then the
   -- WHERE clause's own params (already collected above), then LIMIT/OFFSET.
   local sql_params = { viewer0, viewer0, viewer0, viewer0, viewer0, viewer0 }
   for _, p in ipairs(params) do sql_params[#sql_params + 1] = p end
@@ -1256,6 +1252,16 @@ function M.list_media(req)
   sql_params[#sql_params + 1] = tostring(limit)
   sql_params[#sql_params + 1] = tostring(offset)
 
+  -- Per-post counts and the viewer's liked/bookmarked flags are correlated
+  -- subqueries, not LEFT JOINs + GROUP BY. The joins multiplied every
+  -- post's likes by its comments and forced Postgres to aggregate EVERY
+  -- post matching the filters before it could sort and take one page, so
+  -- each feed load cost grew with the whole gallery (measured ~2.4s on a
+  -- 20k-post copy). As subqueries, sorts that don't depend on counts
+  -- (new/old/views/downloads) walk the created_at index and only compute
+  -- counts for the rows on the page (~60ms on the same data); the
+  -- count-based sorts still look at every candidate but via index lookups
+  -- instead of a joined, grouped scan. Same columns, values and order.
   local sql = string.format([[
     SELECT m.id, m.user_id, m.category_id, m.subcategory_id, m.title, m.description, m.tags,
            m.media_kind, m.mime_type, m.original_filename, m.storage_path, m.file_size,
@@ -1270,21 +1276,15 @@ function M.list_media(req)
            CASE WHEN u.public_profile OR u.id::text=%%s THEN u.website_url ELSE NULL END AS user_website_url,
            CASE WHEN u.public_profile OR u.id::text=%%s THEN u.avatar_path ELSE NULL END AS user_avatar_path,
            u.profile_color, u.public_profile,
-           COUNT(DISTINCT l.user_id) AS like_count,
-           COUNT(DISTINCT cm.id) AS comment_count,
-           MAX(CASE WHEN b.user_id IS NULL THEN 0 ELSE 1 END) AS bookmarked_by_me,
-           MAX(CASE WHEN l2.user_id IS NULL THEN 0 ELSE 1 END) AS liked_by_me
+           (SELECT COUNT(DISTINCT lk.user_id) FROM media_likes lk WHERE lk.media_id = m.id) AS like_count,
+           (SELECT COUNT(*) FROM media_comments cmc WHERE cmc.media_id = m.id) AS comment_count,
+           CASE WHEN EXISTS (SELECT 1 FROM media_bookmarks b WHERE b.media_id = m.id AND b.user_id::text = %%s) THEN 1 ELSE 0 END AS bookmarked_by_me,
+           CASE WHEN EXISTS (SELECT 1 FROM media_likes l2 WHERE l2.media_id = m.id AND l2.user_id::text = %%s) THEN 1 ELSE 0 END AS liked_by_me
     FROM media_items m
     JOIN categories c ON c.id = m.category_id
     LEFT JOIN subcategories sc ON sc.id = m.subcategory_id
     JOIN users u ON u.id = m.user_id
-    LEFT JOIN media_likes l ON l.media_id = m.id
-    LEFT JOIN media_likes l2 ON l2.media_id = m.id AND l2.user_id::text = %%s
-    LEFT JOIN media_bookmarks b ON b.media_id = m.id AND b.user_id::text = %%s
-    LEFT JOIN media_comments cm ON cm.media_id = m.id
     %s
-    GROUP BY m.id, c.name, c.slug, sc.name, sc.slug, u.username, u.display_name, u.bio,
-             u.website_url, u.avatar_path, u.profile_color, u.public_profile, u.id
     ORDER BY %s
     LIMIT %%s OFFSET %%s
   ]], where, order)
@@ -1350,21 +1350,15 @@ local function fetch_media_feed(req, viewer_id, extra_clause, extra_params, orde
            CASE WHEN u.public_profile OR u.id::text=%%s THEN u.website_url ELSE NULL END AS user_website_url,
            CASE WHEN u.public_profile OR u.id::text=%%s THEN u.avatar_path ELSE NULL END AS user_avatar_path,
            u.profile_color, u.public_profile,
-           COUNT(DISTINCT l.user_id) AS like_count,
-           COUNT(DISTINCT cm.id) AS comment_count,
-           MAX(CASE WHEN b.user_id IS NULL THEN 0 ELSE 1 END) AS bookmarked_by_me,
-           MAX(CASE WHEN l2.user_id IS NULL THEN 0 ELSE 1 END) AS liked_by_me
+           (SELECT COUNT(DISTINCT lk.user_id) FROM media_likes lk WHERE lk.media_id = m.id) AS like_count,
+           (SELECT COUNT(*) FROM media_comments cmc WHERE cmc.media_id = m.id) AS comment_count,
+           CASE WHEN EXISTS (SELECT 1 FROM media_bookmarks b WHERE b.media_id = m.id AND b.user_id::text = %%s) THEN 1 ELSE 0 END AS bookmarked_by_me,
+           CASE WHEN EXISTS (SELECT 1 FROM media_likes l2 WHERE l2.media_id = m.id AND l2.user_id::text = %%s) THEN 1 ELSE 0 END AS liked_by_me
     FROM media_items m
     JOIN categories c ON c.id = m.category_id
     LEFT JOIN subcategories sc ON sc.id = m.subcategory_id
     JOIN users u ON u.id = m.user_id
-    LEFT JOIN media_likes l ON l.media_id = m.id
-    LEFT JOIN media_likes l2 ON l2.media_id = m.id AND l2.user_id::text = %%s
-    LEFT JOIN media_bookmarks b ON b.media_id = m.id AND b.user_id::text = %%s
-    LEFT JOIN media_comments cm ON cm.media_id = m.id
     %s
-    GROUP BY m.id, c.name, c.slug, sc.name, sc.slug, u.username, u.display_name, u.bio,
-             u.website_url, u.avatar_path, u.profile_color, u.public_profile, u.id
     ORDER BY %s
     LIMIT %%s OFFSET %%s
   ]], where, order_sql)
@@ -1431,12 +1425,12 @@ function M.media_trending(req)
   local auth = auth_optional(req)
   local viewer_id = auth and tostring(auth.id) or nil
   local q = req.query or {}
-  local days = TRENDING_WINDOWS[tostring(q.days or "7")] and tostring(q.days) or "7"
+  local days = TRENDING_WINDOWS[tostring(q.days or "7")] and tostring(q.days or "7") or "7"
   local limit = bounded_limit(q.limit, 30)
   local rows, err = fetch_media_feed(
     req, viewer_id,
     "m.created_at > now() - (%s || ' days')::interval", { days },
-    "(m.views + COUNT(DISTINCT l.user_id) * 3 + COUNT(DISTINCT cm.id) * 2) DESC, m.created_at DESC",
+    "(m.views + (SELECT COUNT(DISTINCT lk.user_id) FROM media_likes lk WHERE lk.media_id = m.id) * 3 + (SELECT COUNT(*) FROM media_comments cmc WHERE cmc.media_id = m.id) * 2) DESC, m.created_at DESC",
     limit, 0
   )
   if err then return 500, { detail = "Query failed: " .. tostring(err) } end
@@ -1534,20 +1528,15 @@ function M.my_media(req)
              c.name AS category_name, c.slug AS category_slug,
              sc.name AS subcategory_name, sc.slug AS subcategory_slug,
              u.username, u.display_name, u.profile_color, u.public_profile,
-             COUNT(DISTINCT l.user_id) AS like_count,
-             COUNT(DISTINCT cm.id) AS comment_count,
-             MAX(CASE WHEN b.user_id IS NULL THEN 0 ELSE 1 END) AS bookmarked_by_me,
-             MAX(CASE WHEN l2.user_id IS NULL THEN 0 ELSE 1 END) AS liked_by_me
+             (SELECT COUNT(DISTINCT lk.user_id) FROM media_likes lk WHERE lk.media_id = m.id) AS like_count,
+             (SELECT COUNT(*) FROM media_comments cmc WHERE cmc.media_id = m.id) AS comment_count,
+             CASE WHEN EXISTS (SELECT 1 FROM media_bookmarks b WHERE b.media_id = m.id AND b.user_id::text = %%s) THEN 1 ELSE 0 END AS bookmarked_by_me,
+             CASE WHEN EXISTS (SELECT 1 FROM media_likes l2 WHERE l2.media_id = m.id AND l2.user_id::text = %%s) THEN 1 ELSE 0 END AS liked_by_me
       FROM media_items m
       JOIN categories c ON c.id = m.category_id
       LEFT JOIN subcategories sc ON sc.id = m.subcategory_id
       JOIN users u ON u.id = m.user_id
-      LEFT JOIN media_likes l ON l.media_id = m.id
-      LEFT JOIN media_likes l2 ON l2.media_id = m.id AND l2.user_id::text = %%s
-      LEFT JOIN media_bookmarks b ON b.media_id = m.id AND b.user_id::text = %%s
-      LEFT JOIN media_comments cm ON cm.media_id = m.id
       WHERE %s
-      GROUP BY m.id, c.name, c.slug, sc.name, sc.slug, u.username, u.display_name, u.profile_color, u.public_profile
       ORDER BY m.created_at DESC
       LIMIT 200
     ]],
@@ -1674,21 +1663,15 @@ local function fetch_media_by_id(media_id, viewer0)
            CASE WHEN u.public_profile OR u.id::text=%s THEN u.website_url ELSE NULL END AS user_website_url,
            CASE WHEN u.public_profile OR u.id::text=%s THEN u.avatar_path ELSE NULL END AS user_avatar_path,
            u.profile_color, u.public_profile,
-           COUNT(DISTINCT l.user_id) AS like_count,
-           COUNT(DISTINCT cm.id) AS comment_count,
-           MAX(CASE WHEN b.user_id IS NULL THEN 0 ELSE 1 END) AS bookmarked_by_me,
-           MAX(CASE WHEN l2.user_id IS NULL THEN 0 ELSE 1 END) AS liked_by_me
+           (SELECT COUNT(DISTINCT lk.user_id) FROM media_likes lk WHERE lk.media_id = m.id) AS like_count,
+           (SELECT COUNT(*) FROM media_comments cmc WHERE cmc.media_id = m.id) AS comment_count,
+           CASE WHEN EXISTS (SELECT 1 FROM media_bookmarks b WHERE b.media_id = m.id AND b.user_id::text = %s) THEN 1 ELSE 0 END AS bookmarked_by_me,
+           CASE WHEN EXISTS (SELECT 1 FROM media_likes l2 WHERE l2.media_id = m.id AND l2.user_id::text = %s) THEN 1 ELSE 0 END AS liked_by_me
     FROM media_items m
     JOIN categories c ON c.id = m.category_id
     LEFT JOIN subcategories sc ON sc.id = m.subcategory_id
     JOIN users u ON u.id = m.user_id
-    LEFT JOIN media_likes l ON l.media_id = m.id
-    LEFT JOIN media_likes l2 ON l2.media_id = m.id AND l2.user_id::text = %s
-    LEFT JOIN media_bookmarks b ON b.media_id = m.id AND b.user_id::text = %s
-    LEFT JOIN media_comments cm ON cm.media_id = m.id
     WHERE m.id = %s
-    GROUP BY m.id, c.name, c.slug, sc.name, sc.slug, u.username, u.display_name, u.bio,
-             u.website_url, u.avatar_path, u.profile_color, u.public_profile, u.id
   ]], viewer0, viewer0, viewer0, viewer0, viewer0, viewer0, tostring(media_id))
   if row then attach_media_subcategories({ row }) end
   return row
@@ -5141,22 +5124,16 @@ function M.collection_detail(req)
                CASE WHEN u.public_profile OR u.id::text=%s THEN u.display_name ELSE u.username END AS display_name,
                CASE WHEN u.public_profile OR u.id::text=%s THEN u.avatar_path ELSE NULL END AS user_avatar_path,
                u.profile_color, u.public_profile,
-               COUNT(DISTINCT l.user_id) AS like_count,
-               COUNT(DISTINCT cm.id) AS comment_count,
-               MAX(CASE WHEN b.user_id IS NULL THEN 0 ELSE 1 END) AS bookmarked_by_me,
-               MAX(CASE WHEN l2.user_id IS NULL THEN 0 ELSE 1 END) AS liked_by_me
+               (SELECT COUNT(DISTINCT lk.user_id) FROM media_likes lk WHERE lk.media_id = m.id) AS like_count,
+               (SELECT COUNT(*) FROM media_comments cmc WHERE cmc.media_id = m.id) AS comment_count,
+               CASE WHEN EXISTS (SELECT 1 FROM media_bookmarks b WHERE b.media_id = m.id AND b.user_id::text = %s) THEN 1 ELSE 0 END AS bookmarked_by_me,
+               CASE WHEN EXISTS (SELECT 1 FROM media_likes l2 WHERE l2.media_id = m.id AND l2.user_id::text = %s) THEN 1 ELSE 0 END AS liked_by_me
         FROM media_collection_items mci
         JOIN media_items m ON m.id = mci.media_id
         JOIN categories c ON c.id = m.category_id
         LEFT JOIN subcategories sc ON sc.id = m.subcategory_id
         JOIN users u ON u.id = m.user_id
-        LEFT JOIN media_likes l ON l.media_id = m.id
-        LEFT JOIN media_likes l2 ON l2.media_id = m.id AND l2.user_id::text = %s
-        LEFT JOIN media_bookmarks b ON b.media_id = m.id AND b.user_id::text = %s
-        LEFT JOIN media_comments cm ON cm.media_id = m.id
         WHERE mci.collection_id=%s AND m.deleted_at IS NULL AND (m.visibility='public' OR m.user_id::text=%s)
-        GROUP BY m.id, mci.added_at, c.name, c.slug, sc.name, sc.slug, u.username, u.display_name,
-                 u.avatar_path, u.profile_color, u.public_profile, u.id
         ORDER BY mci.added_at DESC
         LIMIT 120
       ]],
@@ -5465,20 +5442,15 @@ local function list_profile_media(req, target_id, viewer_id, viewer_can_open_adu
              c.name AS category_name, c.slug AS category_slug,
              sc.name AS subcategory_name, sc.slug AS subcategory_slug,
              u.username, u.display_name, u.profile_color, u.public_profile,
-             COUNT(DISTINCT l.user_id) AS like_count,
-             COUNT(DISTINCT cm.id) AS comment_count,
-             MAX(CASE WHEN b.user_id IS NULL THEN 0 ELSE 1 END) AS bookmarked_by_me,
-             MAX(CASE WHEN l2.user_id IS NULL THEN 0 ELSE 1 END) AS liked_by_me
+             (SELECT COUNT(DISTINCT lk.user_id) FROM media_likes lk WHERE lk.media_id = m.id) AS like_count,
+             (SELECT COUNT(*) FROM media_comments cmc WHERE cmc.media_id = m.id) AS comment_count,
+             CASE WHEN EXISTS (SELECT 1 FROM media_bookmarks b WHERE b.media_id = m.id AND b.user_id::text = %s) THEN 1 ELSE 0 END AS bookmarked_by_me,
+             CASE WHEN EXISTS (SELECT 1 FROM media_likes l2 WHERE l2.media_id = m.id AND l2.user_id::text = %s) THEN 1 ELSE 0 END AS liked_by_me
       FROM media_items m
       JOIN categories c ON c.id = m.category_id
       LEFT JOIN subcategories sc ON sc.id = m.subcategory_id
       JOIN users u ON u.id = m.user_id
-      LEFT JOIN media_likes l ON l.media_id = m.id
-      LEFT JOIN media_likes l2 ON l2.media_id = m.id AND l2.user_id::text = %s
-      LEFT JOIN media_bookmarks b ON b.media_id = m.id AND b.user_id::text = %s
-      LEFT JOIN media_comments cm ON cm.media_id = m.id
       WHERE m.user_id=%s AND m.deleted_at IS NULL AND (m.visibility='public' OR m.user_id::text=%s)
-      GROUP BY m.id, c.name, c.slug, sc.name, sc.slug, u.username, u.display_name, u.profile_color, u.public_profile
       ORDER BY m.pinned_at DESC NULLS LAST, m.created_at DESC
       LIMIT %s
     ]],
