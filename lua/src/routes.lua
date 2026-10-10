@@ -1173,7 +1173,14 @@ function M.list_media(req)
   if max_size then clauses[#clauses + 1] = "m.file_size <= %s"; params[#params + 1] = tostring(math.max(0, max_size)) end
   if date_from then clauses[#clauses + 1] = "m.created_at::date >= %s"; params[#params + 1] = date_from end
   if date_to then clauses[#clauses + 1] = "m.created_at::date <= %s"; params[#params + 1] = date_to end
-  if adult == "only" then clauses[#clauses + 1] = "m.is_adult=true"
+  if not viewer_can_open_adult then
+    -- Unverified/anonymous viewers never see 18+ posts at all -- not even
+    -- a locked placeholder card, see with_urls -- so this overrides any
+    -- adult=only/hide query param rather than layering under it: adult=only
+    -- must not be usable to probe "does any 18+ content exist" via result
+    -- counts for a viewer who isn't allowed to see it either way.
+    clauses[#clauses + 1] = "m.is_adult=false"
+  elseif adult == "only" then clauses[#clauses + 1] = "m.is_adult=true"
   elseif adult == "hide" then clauses[#clauses + 1] = "m.is_adult=false" end
   if tag_query then
     local and_groups, not_tags = parse_tag_query(tag_query)
@@ -1324,6 +1331,12 @@ local function fetch_media_feed(req, viewer_id, extra_clause, extra_params, orde
   if viewer_id then
     clauses[#clauses + 1] = "m.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id=%s)"
     params[#params + 1] = viewer0
+  end
+  if not viewer_can_open_adult then
+    -- Same full-exclusion rule as list_media -- see its comment. This
+    -- backs the following/liked/trending feeds, which have no adult=only/
+    -- hide toggle to override in the first place, so this is unconditional.
+    clauses[#clauses + 1] = "m.is_adult=false"
   end
   if extra_clause then
     clauses[#clauses + 1] = extra_clause
@@ -1723,12 +1736,13 @@ local function compute_similar_media(req, media_id, item, adult_allowed, limit, 
       WHERE m.id != %%s AND m.deleted_at IS NULL AND m.visibility='public'
         AND (m.publish_at IS NULL OR m.publish_at <= now())
         AND (m.category_id = %%s OR %s)
+        %s
       ORDER BY
         (CASE WHEN m.category_id = %%s THEN 1 ELSE 0 END)
         + (SELECT count(*) FROM jsonb_array_elements_text(m.tags::jsonb) t WHERE t = ANY(%s::text[])) DESC,
         m.created_at DESC
       LIMIT %%s OFFSET %%s
-    ]], where_tag_parts[1], order_tag_array_sql)
+    ]], where_tag_parts[1], adult_allowed and "" or "AND m.is_adult=false", order_tag_array_sql)
 
     similar_params = { tostring(media_id), tostring(item.category_id) }
     for _, p in ipairs(where_tag_params) do similar_params[#similar_params + 1] = p end
@@ -1737,15 +1751,16 @@ local function compute_similar_media(req, media_id, item, adult_allowed, limit, 
     similar_params[#similar_params + 1] = tostring(limit)
     similar_params[#similar_params + 1] = tostring(offset)
   else
-    similar_sql = [[
+    similar_sql = string.format([[
       SELECT m.id, m.user_id, m.category_id, m.subcategory_id, m.title, m.media_kind, m.mime_type,
              m.original_filename, m.storage_path, m.is_adult, m.created_at, m.views
       FROM media_items m
-      WHERE m.category_id = %s AND m.id != %s AND m.deleted_at IS NULL AND m.visibility='public'
+      WHERE m.category_id = %%s AND m.id != %%s AND m.deleted_at IS NULL AND m.visibility='public'
         AND (m.publish_at IS NULL OR m.publish_at <= now())
+        %s
       ORDER BY m.created_at DESC
-      LIMIT %s OFFSET %s
-    ]]
+      LIMIT %%s OFFSET %%s
+    ]], adult_allowed and "" or "AND m.is_adult=false")
     similar_params = { tostring(item.category_id), tostring(media_id), tostring(limit), tostring(offset) }
   end
   local similar = db.fetchall(similar_sql, unpack(similar_params))
@@ -5112,7 +5127,7 @@ function M.collection_detail(req)
   else
     local v = viewer_id or "0"
     media_rows = db.fetchall(
-      [[
+      string.format([[
         SELECT m.id, m.user_id, m.category_id, m.subcategory_id, m.title, m.description, m.tags,
                m.media_kind, m.mime_type, m.original_filename, m.storage_path, m.file_size,
                m.views, m.downloads, m.created_at, m.updated_at, m.visibility,
@@ -5121,22 +5136,23 @@ function M.collection_detail(req)
                c.name AS category_name, c.slug AS category_slug,
                sc.name AS subcategory_name, sc.slug AS subcategory_slug,
                u.username,
-               CASE WHEN u.public_profile OR u.id::text=%s THEN u.display_name ELSE u.username END AS display_name,
-               CASE WHEN u.public_profile OR u.id::text=%s THEN u.avatar_path ELSE NULL END AS user_avatar_path,
+               CASE WHEN u.public_profile OR u.id::text=%%s THEN u.display_name ELSE u.username END AS display_name,
+               CASE WHEN u.public_profile OR u.id::text=%%s THEN u.avatar_path ELSE NULL END AS user_avatar_path,
                u.profile_color, u.public_profile,
                (SELECT COUNT(DISTINCT lk.user_id) FROM media_likes lk WHERE lk.media_id = m.id) AS like_count,
                (SELECT COUNT(*) FROM media_comments cmc WHERE cmc.media_id = m.id) AS comment_count,
-               CASE WHEN EXISTS (SELECT 1 FROM media_bookmarks b WHERE b.media_id = m.id AND b.user_id::text = %s) THEN 1 ELSE 0 END AS bookmarked_by_me,
-               CASE WHEN EXISTS (SELECT 1 FROM media_likes l2 WHERE l2.media_id = m.id AND l2.user_id::text = %s) THEN 1 ELSE 0 END AS liked_by_me
+               CASE WHEN EXISTS (SELECT 1 FROM media_bookmarks b WHERE b.media_id = m.id AND b.user_id::text = %%s) THEN 1 ELSE 0 END AS bookmarked_by_me,
+               CASE WHEN EXISTS (SELECT 1 FROM media_likes l2 WHERE l2.media_id = m.id AND l2.user_id::text = %%s) THEN 1 ELSE 0 END AS liked_by_me
         FROM media_collection_items mci
         JOIN media_items m ON m.id = mci.media_id
         JOIN categories c ON c.id = m.category_id
         LEFT JOIN subcategories sc ON sc.id = m.subcategory_id
         JOIN users u ON u.id = m.user_id
-        WHERE mci.collection_id=%s AND m.deleted_at IS NULL AND (m.visibility='public' OR m.user_id::text=%s)
+        WHERE mci.collection_id=%%s AND m.deleted_at IS NULL AND (m.visibility='public' OR m.user_id::text=%%s)
+          %s
         ORDER BY mci.added_at DESC
         LIMIT 120
-      ]],
+      ]], adult_allowed and "" or "AND m.is_adult=false"),
       v, v, v, v, tostring(collection_id), v
     )
     for _, row in ipairs(media_rows) do decode_media_row(row, adult_allowed, req) end
@@ -5433,7 +5449,7 @@ end
 local function list_profile_media(req, target_id, viewer_id, viewer_can_open_adult, limit)
   local viewer0 = tostring(viewer_id or 0)
   local rows = db.fetchall(
-    [[
+    string.format([[
       SELECT m.id, m.user_id, m.category_id, m.subcategory_id, m.title, m.description, m.tags,
              m.media_kind, m.mime_type, m.original_filename, m.storage_path, m.file_size,
              m.views, m.downloads, m.created_at, m.updated_at, m.visibility,
@@ -5444,16 +5460,17 @@ local function list_profile_media(req, target_id, viewer_id, viewer_can_open_adu
              u.username, u.display_name, u.profile_color, u.public_profile,
              (SELECT COUNT(DISTINCT lk.user_id) FROM media_likes lk WHERE lk.media_id = m.id) AS like_count,
              (SELECT COUNT(*) FROM media_comments cmc WHERE cmc.media_id = m.id) AS comment_count,
-             CASE WHEN EXISTS (SELECT 1 FROM media_bookmarks b WHERE b.media_id = m.id AND b.user_id::text = %s) THEN 1 ELSE 0 END AS bookmarked_by_me,
-             CASE WHEN EXISTS (SELECT 1 FROM media_likes l2 WHERE l2.media_id = m.id AND l2.user_id::text = %s) THEN 1 ELSE 0 END AS liked_by_me
+             CASE WHEN EXISTS (SELECT 1 FROM media_bookmarks b WHERE b.media_id = m.id AND b.user_id::text = %%s) THEN 1 ELSE 0 END AS bookmarked_by_me,
+             CASE WHEN EXISTS (SELECT 1 FROM media_likes l2 WHERE l2.media_id = m.id AND l2.user_id::text = %%s) THEN 1 ELSE 0 END AS liked_by_me
       FROM media_items m
       JOIN categories c ON c.id = m.category_id
       LEFT JOIN subcategories sc ON sc.id = m.subcategory_id
       JOIN users u ON u.id = m.user_id
-      WHERE m.user_id=%s AND m.deleted_at IS NULL AND (m.visibility='public' OR m.user_id::text=%s)
+      WHERE m.user_id=%%s AND m.deleted_at IS NULL AND (m.visibility='public' OR m.user_id::text=%%s)
+        %s
       ORDER BY m.pinned_at DESC NULLS LAST, m.created_at DESC
-      LIMIT %s
-    ]],
+      LIMIT %%s
+    ]], viewer_can_open_adult and "" or "AND m.is_adult=false"),
     viewer0, viewer0, tostring(target_id), viewer0, tostring(limit)
   )
   attach_media_subcategories(rows)
