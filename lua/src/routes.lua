@@ -6392,7 +6392,7 @@ end
 -- script failed with a silently-swallowed "command not found" every time,
 -- the actual reason no tracks were ever appearing).
 local function ytdlp_bin()
-  return os.getenv("GALLERY_YTDLP_BIN") or (os.getenv("HOME") or "/home/proxy") .. "/.local/bin/yt-dlp"
+  return os.getenv("GALLERY_YTDLP_BIN") or (os.getenv("HOME") or "/home/desmondc") .. "/.local/bin/yt-dlp"
 end
 
 function M.admin_import_background_music_playlist(req)
@@ -7190,6 +7190,31 @@ local function apply_image_watermark_if_configured(media_id, item, content, mime
 end
 
 function M.serve_media_thumb(req)
+  -- Claims the right to launch a backgrounded thumbnail-render job: writes
+  -- `marker_path` with the current epoch and returns true, unless a fresh
+  -- (<120s old) marker is already there (another request's job is in
+  -- flight), in which case it returns false and does nothing. Mirrors
+  -- video_extras.lua's claim_job; declared as a local *inside* this
+  -- function rather than at file scope because routes.lua is already at
+  -- LuaJIT's 200-local-per-chunk ceiling for the main chunk (see
+  -- original_bytes_cache_path's neighboring range_io comment) -- a nested
+  -- function's locals get their own separate budget.
+  local function claim_thumb_job(marker_path)
+    local existing = io.open(marker_path, "rb")
+    if existing then
+      local claimed_at = tonumber(existing:read("*a") or "")
+      existing:close()
+      if claimed_at and (os.time() - claimed_at) < 120 then
+        return false
+      end
+    end
+    local out = io.open(marker_path, "wb")
+    if not out then return false end
+    out:write(tostring(os.time()))
+    out:close()
+    return true
+  end
+
   local media_id = tonumber(req.params.media_id)
   if not media_id then return 404, { detail = "Media not found." } end
   local auth = auth_optional(req)
@@ -7222,21 +7247,61 @@ function M.serve_media_thumb(req)
     return 200, bytes, { ["Content-Type"] = "image/webp", ["Cache-Control"] = "public, max-age=604800, immutable" }
   end
 
+  if media_kind == "video" then
+    -- Rendering a video thumb means loading the whole source and having
+    -- ffmpeg seek/decode into it -- multi-second on a large upload, and
+    -- that blocks copas' single event loop for every OTHER concurrent
+    -- request on this worker meanwhile (see media_files.lua's header
+    -- comment). A burst of misses against never-before-viewed videos (a
+    -- bulk import, a cache purge) would otherwise stall the whole worker
+    -- one video at a time. So this backgrounds the render instead of
+    -- calling it inline: claim a job marker, resolve+persist the source
+    -- once, launch ffmpeg detached, and return the same placeholder SVG
+    -- already used for the "couldn't render" case immediately. The real
+    -- thumbnail takes over on whichever later request finds the cache file
+    -- in place -- same contract the frontend already handles today.
+    local marker = cache_path .. ".pending"
+    local cache_dir = cache_path:match("^(.*)/[^/]+$")
+    -- Must exist before claim_thumb_job's io.open(marker, "wb") below --
+    -- a never-before-rendered shard directory doesn't exist yet, which
+    -- would otherwise make the marker write fail, claim_thumb_job return
+    -- false, and the render job silently never launch at all.
+    os.execute("mkdir -p " .. shell_quote(cache_dir))
+    if claim_thumb_job(marker) then
+      local content = resolve_media_bytes(item)
+      if content then
+        local src_path = original_bytes_cache_path(media_id, item)
+        local tmp_dst = cache_path .. ".tmp.webp"
+        local render_cmd = media_files.render_webp_cmd(src_path, tmp_dst, width, 84, 0.35)
+        os.execute(string.format(
+          "( mkdir -p %s; %s; if [ -s %s ]; then mv -f %s %s; fi; rm -f %s ) >/dev/null 2>&1 &",
+          shell_quote(cache_dir), render_cmd, shell_quote(tmp_dst), shell_quote(tmp_dst), shell_quote(cache_path), shell_quote(marker)
+        ))
+      else
+        os.remove(marker)
+      end
+    end
+    local svg = media_files.video_placeholder_svg(width)
+    -- Short, non-immutable cache: unlike the permanent "couldn't render"
+    -- case this used to be the only user of, this placeholder can also mean
+    -- "rendering right now" -- a week-long immutable cache would otherwise
+    -- freeze a fresh upload's thumbnail as a placeholder for a week even
+    -- after the real render finishes seconds later.
+    return 200, svg, { ["Content-Type"] = "image/svg+xml", ["Cache-Control"] = "public, max-age=20" }
+  end
+
+  -- Images only below: a small-image webp encode is cheap (tens of ms), so
+  -- this stays synchronous -- see media_files.lua's header comment.
   local content = resolve_media_bytes(item)
   if content then
     content = apply_image_watermark_if_configured(media_id, item, content, item.mime_type)
-    local rendered = media_files.render_webp_from_bytes(content, width, 84, media_kind == "video" and 0.35 or nil)
+    local rendered = media_files.render_webp_from_bytes(content, width, 84, nil)
     if rendered then
-      os.execute("mkdir -p " .. (media_kind == "video" and (M.settings.uploads_dir .. "/_thumb_cache/" .. shard) or (M.settings.uploads_dir .. "/_thumb_cache")))
+      os.execute("mkdir -p " .. M.settings.uploads_dir .. "/_thumb_cache")
       local out = io.open(cache_path, "wb")
       if out then out:write(rendered); out:close() end
       return 200, rendered, { ["Content-Type"] = "image/webp", ["Cache-Control"] = "public, max-age=604800, immutable" }
     end
-  end
-
-  if media_kind == "video" then
-    local svg = media_files.video_placeholder_svg(width)
-    return 200, svg, { ["Content-Type"] = "image/svg+xml", ["Cache-Control"] = "public, max-age=604800, immutable" }
   end
   return 404, { detail = "File missing from database." }
 end

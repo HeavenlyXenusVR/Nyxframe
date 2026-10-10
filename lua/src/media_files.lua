@@ -24,9 +24,20 @@
 -- scale=... -c:v libwebp <dst>` handles a single still image exactly like a
 -- 1-frame video, so the same helper serves both call sites. This blocks
 -- copas' single-threaded event loop for the duration of the ffmpeg process
--- (io.popen/os.execute have no async variant without extra rocks) -- fine
--- for this deployment's traffic level, but a real scaling concern flagged
--- here rather than silently accepted.
+-- (io.popen/os.execute have no async variant without extra rocks).
+--
+-- Still-image thumbnails call M.render_webp/M.render_webp_from_bytes
+-- synchronously below -- a small-image webp encode is cheap enough (tens of
+-- ms) that this is fine at this deployment's traffic level. Video
+-- thumbnails are the case that actually matters: they load the whole source
+-- into memory and ffmpeg has to seek/decode into it, which can run multi-
+-- second on a large upload, stalling every OTHER concurrent request on this
+-- worker for that long. routes.lua's serve_media_thumb therefore does NOT
+-- call M.render_webp for video -- it backgrounds M.render_webp_cmd's command
+-- string via a detached shell job (the same fire-and-forget + marker-file
+-- pattern video_extras.lua's ensure_sprite/ensure_captions already use) and
+-- serves the existing placeholder SVG immediately; the real thumbnail takes
+-- over on whichever later request finds the cache file in place.
 
 local db = require("db")
 local copas_ok, copas = pcall(require, "copas")
@@ -398,23 +409,31 @@ end
 -- WEBP thumbnail/preview at `dst_path`. `seek` (seconds, video only) mirrors
 -- _render_video_frame_thumb's "-ss 0.35" grab-a-real-frame-not-just-frame-0
 -- behavior. Returns true on success.
-function M.render_webp(src_path, dst_path, max_edge, quality, seek)
-  -- IMPORTANT: the temp file must end in ".webp" (not e.g. dst_path..".tmp"),
-  -- or ffmpeg's output-format auto-detection (which goes purely off the
-  -- filename extension) fails with "Unable to choose an output format" --
-  -- discovered by actually running this against a live sample file, not
-  -- assumed. "-f webp" is also passed explicitly as a second safety net.
-  local tmp_dst = dst_path .. ".tmp.webp"
+-- Factored out of render_webp so a caller that needs this to run detached
+-- (routes.lua's async video-thumbnail path -- see serve_media_thumb) can
+-- wrap the exact same ffmpeg invocation in a backgrounded shell job instead
+-- of re-deriving the flags separately and risking the two copies drifting.
+-- `dst_path` must end in ".webp" (not e.g. "dst..tmp"), or ffmpeg's
+-- output-format auto-detection (which goes purely off the filename
+-- extension) fails with "Unable to choose an output format" -- discovered
+-- by actually running this against a live sample file, not assumed. "-f
+-- webp" is also passed explicitly as a second safety net.
+function M.render_webp_cmd(src_path, dst_path, max_edge, quality, seek)
   local seek_args = seek and (" -ss " .. tostring(seek)) or ""
-  local cmd = string.format(
+  return string.format(
     "%s -y -hide_banner -loglevel error%s -i %s -frames:v 1 -vf %s -c:v libwebp -compression_level 5 -quality %d -f webp %s </dev/null >/dev/null 2>&1",
     ffmpeg_prefix(),
     seek_args,
     shell_quote(src_path),
     shell_quote(string.format("scale='min(%d,iw)':-2:flags=lanczos", max_edge)),
     math.floor(quality),
-    shell_quote(tmp_dst)
+    shell_quote(dst_path)
   )
+end
+
+function M.render_webp(src_path, dst_path, max_edge, quality, seek)
+  local tmp_dst = dst_path .. ".tmp.webp"
+  local cmd = M.render_webp_cmd(src_path, tmp_dst, max_edge, quality, seek)
   local ok = os.execute(cmd)
   -- Lua 5.1/LuaJIT's os.execute returns the raw OS exit status (0 == success);
   -- Lua 5.2+ returns (true, "exit", 0). Accept either convention.

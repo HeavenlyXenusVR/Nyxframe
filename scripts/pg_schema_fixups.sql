@@ -205,7 +205,8 @@ CREATE INDEX IF NOT EXISTS idx_categories_created_by ON categories (created_by);
 CREATE INDEX IF NOT EXISTS idx_friend_addressee_status ON friend_requests (addressee_id, status, created_at);
 CREATE INDEX IF NOT EXISTS idx_friend_requester_status ON friend_requests (requester_id, status, created_at);
 
-CREATE INDEX IF NOT EXISTS idx_bookmarks_media ON media_bookmarks (media_id);
+CREATE INDEX IF NOT EXISTS idx_bookmarks_media_user ON media_bookmarks (media_id, user_id);
+DROP INDEX IF EXISTS idx_bookmarks_media;
 
 CREATE INDEX IF NOT EXISTS idx_collection_items_media ON media_collection_items (media_id);
 

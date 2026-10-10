@@ -34,6 +34,15 @@ local ws_sync = require("websocket.sync")
 
 local M = {}
 M.routes = {} -- { {method=, pattern=, keys={}, handler=} }
+-- Fast path for match_route below: routes with no ":param" segment (the
+-- large majority -- 158/158 of this server's registered routes contain no
+-- "?"/"*" either, confirmed by grepping main.lua's httpd.route(...) calls,
+-- so an exact string match on the path is behaviorally identical to the
+-- regex match split_path_pattern would otherwise build for them) go in here
+-- keyed by method+path for an O(1) lookup instead of a linear regex scan.
+-- Routes with a ":param" still need the regex list below.
+M.literal_routes = {} -- M.literal_routes[method][path] = { handler=, pattern= }
+M.pattern_routes = {} -- M.pattern_routes[method] = { {regex=, keys=, handler=, pattern=}, ... }
 M.ws_routes = {} -- { {pattern=, handler=} }, GET+Upgrade:websocket only, exact-path match
 M.cors = { allowed_origins = {}, origin_suffix_matcher = nil }
 -- CIDR allow-list of peers this server will trust an incoming
@@ -66,7 +75,16 @@ end
 
 function M.route(method, pattern, handler)
   local regex, keys = split_path_pattern(pattern)
-  M.routes[#M.routes + 1] = { method = method, regex = regex, keys = keys, handler = handler, pattern = pattern }
+  local entry = { method = method, regex = regex, keys = keys, handler = handler, pattern = pattern }
+  M.routes[#M.routes + 1] = entry
+  if #keys > 0 then
+    M.pattern_routes[method] = M.pattern_routes[method] or {}
+    local bucket = M.pattern_routes[method]
+    bucket[#bucket + 1] = entry
+  else
+    M.literal_routes[method] = M.literal_routes[method] or {}
+    M.literal_routes[method][pattern] = entry
+  end
 end
 
 -- WS routes are exact-path only (just "/ws" today) — no :param support needed.
@@ -88,18 +106,24 @@ end
 -- "/api/media/:media_id"), not the raw path -- M.on_request below buckets
 -- telemetry by this so a distinct media_id/job_id per request doesn't blow
 -- up the bucket count.
+--
+-- Literal (no ":param") routes are the large majority -- checked first via
+-- an O(1) table lookup instead of a linear regex scan over every registered
+-- route. Only a path that misses the literal table falls through to the
+-- much smaller parametrized-route list for that method.
 local function match_route(method, path)
-  for _, r in ipairs(M.routes) do
-    if r.method == method then
-      if #r.keys > 0 then
-        local caps = { path:match(r.regex) }
-        if caps[1] ~= nil then
-          local params = {}
-          for i, k in ipairs(r.keys) do params[k] = caps[i] end
-          return r.handler, params, r.pattern
-        end
-      elseif path:match(r.regex) then
-        return r.handler, {}, r.pattern
+  local literal_bucket = M.literal_routes[method]
+  local lit = literal_bucket and literal_bucket[path]
+  if lit then return lit.handler, {}, lit.pattern end
+
+  local pattern_bucket = M.pattern_routes[method]
+  if pattern_bucket then
+    for _, r in ipairs(pattern_bucket) do
+      local caps = { path:match(r.regex) }
+      if caps[1] ~= nil then
+        local params = {}
+        for i, k in ipairs(r.keys) do params[k] = caps[i] end
+        return r.handler, params, r.pattern
       end
     end
   end
@@ -219,10 +243,30 @@ local function read_headers(sock)
   return first_line, headers
 end
 
-local function send_response(sock, status, status_text, headers, body)
+-- Idle-read timeout (seconds) for a kept-alive connection waiting on its
+-- NEXT request. Applied to the whole socket right after accept (so it also
+-- bounds how long a freshly-opened connection can sit there never sending a
+-- request line at all), not just between requests. Generous enough for any
+-- real client/browser's between-request gap on an open page, short enough
+-- that an idle/dead connection doesn't sit on a coroutine indefinitely now
+-- that connections can outlive a single request.
+local KEEP_ALIVE_IDLE_SECONDS = 15
+
+-- A response is always fully buffered with an exact Content-Length (see
+-- handle_connection -- every handler's return value goes through this, no
+-- code path anywhere streams directly to the socket), which is exactly
+-- what HTTP/1.1 keep-alive needs: the client can find the end of this
+-- response without relying on the connection closing, so the socket is
+-- safe to reuse for another request right after.
+local function send_response(sock, status, status_text, headers, body, keep_alive)
   body = body or ""
   headers["Content-Length"] = tostring(#body)
-  headers["Connection"] = "close"
+  if keep_alive then
+    headers["Connection"] = "keep-alive"
+    headers["Keep-Alive"] = "timeout=" .. KEEP_ALIVE_IDLE_SECONDS
+  else
+    headers["Connection"] = "close"
+  end
   headers["Server"] = "SwarmPanel-Lua"
   local lines = { string.format("HTTP/1.1 %d %s", status, status_text) }
   for k, v in pairs(headers) do
@@ -231,6 +275,23 @@ local function send_response(sock, status, status_text, headers, body)
   lines[#lines + 1] = ""
   lines[#lines + 1] = body
   copas.send(sock, table.concat(lines, "\r\n"))
+end
+
+-- HTTP/1.1 defaults to persistent connections unless the client sent
+-- "Connection: close"; HTTP/1.0 is the opposite (closes by default unless
+-- the client explicitly asked for "Connection: keep-alive"). version is the
+-- "1.1"/"1.0" capture from the request line, nil if somehow unparseable
+-- (treated as 1.0's stricter default).
+local function wants_keep_alive(headers, version)
+  local conn_hdr = (headers["connection"] or ""):lower()
+  if conn_hdr:find("close", 1, true) then return false end
+  if version == "1.1" then return true end
+  -- plain=true below means NO pattern escaping -- "-" needs no "%-" here
+  -- (that literal "%" would never appear in a real Connection header, which
+  -- is exactly the bug this comment is pinned next to: an earlier version
+  -- of this line searched for the escaped pattern text itself instead of a
+  -- literal "keep-alive" substring, so it never matched).
+  return conn_hdr:find("keep-alive", 1, true) ~= nil
 end
 
 local STATUS_TEXT = {
@@ -377,31 +438,40 @@ local function access_log_line(method, path, status, duration_ms, client_ip, use
   ))
 end
 
-local function handle_connection(sock)
-  local start_time = socket.gettime()
+-- Serves exactly one request off `sock` and returns whether the connection
+-- should stay open for another one. Split out of handle_connection so that
+-- function can loop this for HTTP/1.1 keep-alive instead of closing the
+-- socket after every single request (see KEEP_ALIVE_IDLE_SECONDS above).
+local function serve_one_request(sock, start_time)
   -- Populated as the request is parsed, so a log line can still be written
   -- (with whatever's known so far) even for a request that fails before a
   -- route was ever matched -- e.g. a malformed request line.
   local log_method, log_path, log_status, log_ip, log_ua = nil, nil, nil, nil, nil
   local log_route_pattern = nil
+  -- Defaults to false (close): every early-exit path below (no request
+  -- line at all, a malformed one, a WS upgrade handing the socket off to
+  -- its own lifecycle) wants that default. It only ever becomes true once
+  -- headers are parsed AND the client/HTTP-version actually asked for it.
+  local keep_alive = false
 
   -- Every response in this function should go through this instead of
   -- calling send_response directly, purely so log_status always reflects
   -- what actually got sent to the client, from every exit path below.
   local function respond(status, status_text, headers, body)
     log_status = status
-    send_response(sock, status, status_text, headers, body)
+    send_response(sock, status, status_text, headers, body, keep_alive)
   end
 
-  local ok, err = pcall(function()
+  local ok, result = pcall(function()
     local first_line, headers = read_headers(sock)
-    if not first_line then return end
-    local method, path_and_query = first_line:match("^(%u+)%s+(%S+)%s+HTTP/")
+    if not first_line then return false end
+    local method, path_and_query, version = first_line:match("^(%u+)%s+(%S+)%s+HTTP/(%d%.%d)")
     log_method = method or "?"
     if not method then
       respond(400, "Bad Request", {}, cjson.encode({ detail = "Malformed request line" }))
-      return
+      return false
     end
+    keep_alive = wants_keep_alive(headers, version)
     local path, qs = path_and_query:match("^([^?]*)%??(.*)$")
     log_path = path
     local query = parse_query(qs)
@@ -434,7 +504,10 @@ local function handle_connection(sock)
       if ws_handler then
         log_status = 101
         handle_ws_upgrade(sock, headers, path, query, ws_handler)
-        return
+        -- The socket's lifecycle now belongs entirely to the WS handler
+        -- (which closes it itself) -- nothing left for the HTTP
+        -- keep-alive loop to do with it.
+        return false
       end
       -- No matching WS route: fall through to the normal 404 path below (no
       -- body to read on a GET+Upgrade request either way).
@@ -443,8 +516,16 @@ local function handle_connection(sock)
     local body = ""
     local content_length = tonumber(headers["content-length"] or "0") or 0
     if content_length > 0 then
-      local data, rerr = copas.receive(sock, content_length)
-      body = data or ""
+      local data = copas.receive(sock, content_length)
+      if data then
+        body = data
+      else
+        -- Incomplete/failed body read: the socket's read position no
+        -- longer lines up with where the next request would start, so
+        -- this connection can't safely be reused for another request
+        -- even if the client asked to keep-alive.
+        keep_alive = false
+      end
     end
 
     local resp_headers = {}
@@ -452,7 +533,7 @@ local function handle_connection(sock)
 
     if method == "OPTIONS" then
       respond(204, "No Content", resp_headers, "")
-      return
+      return keep_alive
     end
 
     local handler, params, route_pattern = match_route(method, path)
@@ -463,12 +544,12 @@ local function handle_connection(sock)
         if fb_status then
           for k, v in pairs(fb_headers or {}) do resp_headers[k] = v end
           respond(fb_status, STATUS_TEXT[fb_status] or "OK", resp_headers, fb_body)
-          return
+          return keep_alive
         end
       end
       resp_headers["Content-Type"] = "application/json"
       respond(404, "Not Found", resp_headers, cjson.encode({ detail = "Not found" }))
-      return
+      return keep_alive
     end
 
     local req = {
@@ -516,21 +597,32 @@ local function handle_connection(sock)
       print(string.format("[error-detail] %s %s -> %d: %s", method, path, status, body_out:sub(1, 500)))
     end
     respond(status, STATUS_TEXT[status] or "OK", resp_headers, body_out)
+    return keep_alive
   end)
   if not ok then
-    -- Previously silent: `err` was caught but never logged anywhere, so
-    -- every 500 was completely invisible in `journalctl` -- the only way
-    -- to diagnose one was reproducing it with ad-hoc print() patches added
-    -- and removed by hand. print() here goes to the unit's stdout, same as
-    -- every other log line this service already emits.
-    print("[nyxframe] unhandled error: " .. tostring(err))
+    -- Previously silent: `result` (the pcall error message on this branch)
+    -- was caught but never logged anywhere, so every 500 was completely
+    -- invisible in `journalctl` -- the only way to diagnose one was
+    -- reproducing it with ad-hoc print() patches added and removed by
+    -- hand. print() here goes to the unit's stdout, same as every other
+    -- log line this service already emits.
+    print("[nyxframe] unhandled error: " .. tostring(result))
     log_status = 500
+    -- Force-close rather than trust keep_alive from whatever state things
+    -- were in when the error hit -- an exception partway through (e.g.
+    -- mid body-read or mid JSON decode) can leave the socket's read
+    -- position unknown, which would desync whatever request comes next on
+    -- a reused connection.
+    keep_alive = false
     pcall(respond, 500, "Internal Server Error", { ["Content-Type"] = "application/json" }, cjson.encode({ detail = "Internal server error" }))
+  else
+    keep_alive = result or false
   end
   if log_method then
     -- log_method is only nil for a connection that closed before sending
-    -- any request line at all (e.g. a TCP health-check probe) -- nothing
-    -- meaningful to log for those.
+    -- any request line at all (e.g. a TCP health-check probe, or this
+    -- connection's keep-alive idle timeout firing while waiting on the
+    -- NEXT request) -- nothing meaningful to log for those.
     local duration_ms = (socket.gettime() - start_time) * 1000
     access_log_line(log_method, log_path, log_status, duration_ms, log_ip, log_ua)
     if M.on_request then
@@ -542,6 +634,25 @@ local function handle_connection(sock)
       pcall(M.on_request, log_method, log_route_pattern or log_path, log_status, duration_ms)
     end
     io.stdout:flush()
+  end
+  return keep_alive
+end
+
+-- Loops serve_one_request over the same socket for as long as the client
+-- and this server both agree to keep it open (see wants_keep_alive),
+-- instead of the pre-keep-alive behavior of closing after exactly one
+-- request. settimeout applies to every read on this socket, including the
+-- very first request line -- it's what turns an idle/dead connection (a
+-- client that opened a socket and then sent nothing, or a reused
+-- connection nobody sent another request on) into a clean close instead of
+-- tying up a coroutine indefinitely, now that a connection's lifetime is no
+-- longer bounded by "exactly one request".
+local function handle_connection(sock)
+  sock:settimeout(KEEP_ALIVE_IDLE_SECONDS)
+  while true do
+    local start_time = socket.gettime()
+    local keep_alive = serve_one_request(sock, start_time)
+    if not keep_alive then break end
   end
   pcall(function() sock:close() end)
 end
