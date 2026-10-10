@@ -31,6 +31,9 @@ export function FeedPage({ ctx, mode }) {
   // Latest request wins: flipping pages quickly (or a background refresh
   // overlapping a page change) must not let an older response land last.
   const requestRef = useRef(0);
+  // Last {count, latest} seen from /api/feed/signal -- null means "no
+  // baseline yet", which always falls through to a real fetch below.
+  const feedSignalRef = useRef(null);
   const loadFeed = useCallback(({ background = false } = {}) => {
     if (!userId) return Promise.resolve();
     const requestId = ++requestRef.current;
@@ -61,7 +64,27 @@ export function FeedPage({ ctx, mode }) {
   useEffect(() => {
     loadFeed();
   }, [loadFeed]);
-  useLiveRefresh(() => loadFeed({ background: true }), { enabled: Boolean(ctx.user) && page === 1, interval: 22_000 });
+
+  // Checked on every poll tick BEFORE paying for a full loadFeed() --
+  // that query costs a per-row correlated subquery (likes/comments/
+  // bookmarked/liked) plus two JOINs, which is wasted work on every tick
+  // that comes back identical to what's already on screen. /api/feed/signal
+  // is a plain COUNT+MAX(created_at) with no joins at all; only a change
+  // there triggers the real fetch. A like/comment landing on an
+  // already-visible post doesn't move this signal (neither touches
+  // media_items), so it surfaces on the next tick that DOES see a change,
+  // or on the viewer's own next real page load -- see feed_signal's own
+  // header comment in routes.lua for why that's an accepted tradeoff.
+  const checkFeedSignal = useCallback(async () => {
+    if (!userId) return;
+    const kind = mode === "liked" ? "liked" : "following";
+    const signal = await apiFetch(`/api/feed/signal${toQuery({ kind })}`);
+    const prev = feedSignalRef.current;
+    feedSignalRef.current = signal;
+    if (prev && prev.count === signal.count && prev.latest === signal.latest) return;
+    await loadFeed({ background: true });
+  }, [userId, mode, loadFeed]);
+  useLiveRefresh(checkFeedSignal, { enabled: Boolean(ctx.user) && page === 1, interval: 22_000 });
 
   if (!ctx.user) return <RequireLogin />;
 

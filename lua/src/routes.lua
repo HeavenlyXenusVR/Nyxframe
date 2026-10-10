@@ -181,9 +181,71 @@ local function decode_user(row)
   return row
 end
 
+-- get_user() is called 2+ times on nearly every authenticated request
+-- (current_user, viewer_adult_allowed in every list endpoint, etc.) -- a
+-- short-TTL in-process cache cuts that to one Postgres round trip per user
+-- per TTL window instead of one per request, which matters once concurrent
+-- request volume climbs (this DB is shared cluster-wide with the Discord
+-- bot fleet/SwarmPanel/Aria -- see config.lua's pool-size comment). ONE
+-- table (not two top-level locals) purely to stay under this file's
+-- 200-local ceiling, same convention as the `transcode` table elsewhere.
+--
+-- Staleness risk: a few seconds of an out-of-date age_verified_at/
+-- adult_content_consent/display_name/etc is no worse than the race that
+-- already exists between any read and the response reaching the client.
+-- The one case that DOES matter -- a request that updates its own user row
+-- and then immediately re-reads it to build the response ("refreshed =
+-- get_user(user.id)", 8 call sites: register/login's last_seen touch,
+-- profile/settings updates, avatar upload, age verification, Discord
+-- verify/unverify) -- is handled by explicit invalidation at each of those
+-- sites instead of relying on the TTL alone, so a just-verified user's
+-- own response always reflects the write they just made.
+local user_cache = { entries = {}, ttl_seconds = 5, max_entries = 500 }
+
+function user_cache.deep_copy(value)
+  if type(value) ~= "table" then return value end
+  local out = {}
+  for k, v in pairs(value) do out[k] = user_cache.deep_copy(v) end
+  return out
+end
+
+function user_cache.invalidate(user_id)
+  user_cache.entries[tostring(user_id)] = nil
+end
+
 local function get_user(user_id)
+  local key = tostring(user_id)
+  local now = os.time()
+  local cached = user_cache.entries[key]
+  if cached and (now - cached.at) < user_cache.ttl_seconds then
+    -- A copy, not the stored reference: several callers add/overwrite
+    -- fields on the table get_user() returns (e.g. M.me's
+    -- `user.site_owner = is_site_owner(user)`, with_derived_accent's
+    -- `user.user_settings.accent_gradient = ...`) -- handing out the same
+    -- object to every caller within the TTL window would let one
+    -- caller's addition leak into another's, so decode_user's output gets
+    -- copied (deeply, since user_settings/featured_tags are nested tables
+    -- some callers mutate in place too) on every read, hit or miss.
+    return user_cache.deep_copy(cached.user)
+  end
+
   local row = db.fetchone("SELECT " .. USER_PUBLIC_COLUMNS .. " FROM users WHERE id=%s", user_id)
-  return decode_user(row)
+  local decoded = decode_user(row)
+  if decoded then
+    -- Defensive cap, same ceiling-and-prune idea as ratelimit_mem.lua's
+    -- BUCKETS_MAX: unlikely to matter at this site's scale (distinct user
+    -- ids are bounded by real accounts, not attacker-controlled like an
+    -- IP-keyed bucket), but cheap insurance against unbounded growth.
+    local count = 0
+    for _ in pairs(user_cache.entries) do count = count + 1 end
+    if count >= user_cache.max_entries then
+      for k, v in pairs(user_cache.entries) do
+        if (now - v.at) >= user_cache.ttl_seconds then user_cache.entries[k] = nil end
+      end
+    end
+    user_cache.entries[key] = { at = now, user = decoded }
+  end
+  return decoded and user_cache.deep_copy(decoded) or nil
 end
 
 -- Must exactly match the real account's stored `email` column (case-
@@ -418,6 +480,7 @@ function M.register(req)
     return 500, { detail = "Registration failed: " .. tostring(err) }
   end
   M.telemetry.record("auth", "register", "success", nil, { username = username })
+  user_cache.invalidate(row.id)
   local user = get_user(row.id)
   local token = gauth.issue_token(M.settings.session_secret, user, M.settings.api_token_ttl_seconds)
   return 200, {
@@ -467,6 +530,7 @@ function M.login(req)
   if not password_ok then return 401, { detail = "Invalid username or password." } end
 
   db.execute("UPDATE users SET last_login_at=now(), last_seen_at=now() WHERE id=%s", row.id)
+  user_cache.invalidate(row.id)
   local user = get_user(row.id)
   if is_actively_banned(user) then
     M.telemetry.count("auth_login_banned")
@@ -528,6 +592,7 @@ function M.update_profile(req)
     result.public_profile, result.show_liked_count, result.show_collections,
     result.show_recent_uploads, result.show_friends, user.id
   )
+  user_cache.invalidate(user.id)
   local refreshed = get_user(user.id)
   refreshed.site_owner = is_site_owner(refreshed)
   return 200, { user = with_user_urls(req, with_derived_accent(refreshed)) }
@@ -550,6 +615,7 @@ function M.update_settings(req)
   local ok, result = pcall(user_settings.clean_user_settings, filtered, user.user_settings or {})
   if not ok then return 400, { detail = tostring(result):gsub("^.-:%d+:%s*", "") } end
   db.execute("UPDATE users SET user_settings=%s WHERE id=%s", cjson.encode(result), user.id)
+  user_cache.invalidate(user.id)
   local refreshed = get_user(user.id)
   refreshed.site_owner = is_site_owner(refreshed)
   return 200, { user = with_user_urls(req, with_derived_accent(refreshed)) }
@@ -1381,6 +1447,64 @@ local function fetch_media_feed(req, viewer_id, extra_clause, extra_params, orde
   attach_media_subcategories(rows)
   for _, row in ipairs(rows) do decode_media_row(row, viewer_can_open_adult, req) end
   return rows
+end
+
+-- GET /api/feed/signal?kind=following|liked -- a cheap "has this feed
+-- actually changed" check for FeedPage.jsx's background poll
+-- (useLiveRefresh, every ~20s) to call BEFORE paying for a full
+-- fetch_media_feed-shaped query. That query's SELECT list costs a
+-- correlated subquery per row (like_count/comment_count/bookmarked_by_me/
+-- liked_by_me) and two JOINs purely to decorate rows nobody looks at again
+-- if nothing actually changed since the last poll -- at N concurrent
+-- pollers every ~20s, that's a steady floor of full-feed-cost queries
+-- against a Postgres instance shared cluster-wide with the Discord bot
+-- fleet/SwarmPanel/Aria, even when every single poll comes back identical.
+--
+-- Deliberately a separate, duplicated WHERE-clause build rather than a
+-- factor-out of fetch_media_feed's -- same rationale fetch_media_by_id's
+-- own header comment gives for not factoring out of list_media: avoids
+-- risking a regression in the already-verified, already-deployed heavy
+-- query for the sake of this cheap sibling.
+--
+-- count+MAX(created_at) catches new/removed posts (the case that actually
+-- changes what a viewer sees in their feed) but NOT a like/comment landing
+-- on an already-visible post, since neither touches media_items at all --
+-- an accepted tradeoff: the full per-row query already only existed to
+-- decorate exactly those two counts, so the one case this signal can't see
+-- is also the one the audit that led to this endpoint flagged as the
+-- actual cost driver. A like/comment still shows up the moment anything
+-- ELSE changes the feed, or on the viewer's own next real page load.
+function M.feed_signal(req)
+  local user, auth, status, body = current_user(req)
+  if not user then return status, body end
+  local viewer0 = tostring(user.id)
+  local kind = req.query and req.query.kind == "liked" and "liked" or "following"
+
+  local viewer_can_open_adult = nn(user.age_verified_at) ~= nil and user.adult_content_consent
+
+  local clauses = {
+    "m.deleted_at IS NULL",
+    "(m.visibility='public' OR m.user_id=%s)",
+    "(m.publish_at IS NULL OR m.publish_at <= now() OR m.user_id=%s)",
+    "m.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id=%s)",
+  }
+  local params = { viewer0, viewer0, viewer0 }
+  if not viewer_can_open_adult then
+    clauses[#clauses + 1] = "m.is_adult=false"
+  end
+  if kind == "liked" then
+    clauses[#clauses + 1] = "EXISTS (SELECT 1 FROM media_likes ml WHERE ml.media_id=m.id AND ml.user_id=%s)"
+    params[#params + 1] = viewer0
+  else
+    clauses[#clauses + 1] = "m.user_id IN (SELECT followed_id FROM user_follows WHERE follower_id=%s)"
+    params[#params + 1] = viewer0
+  end
+
+  local sql = "SELECT COUNT(*) AS count, MAX(m.created_at) AS latest FROM media_items m WHERE "
+    .. table.concat(clauses, " AND ")
+  local row, err = db.fetchone(sql, unpack(params))
+  if err then return 500, { detail = "Query failed: " .. tostring(err) } end
+  return 200, { count = db.toint(row and row.count, 0), latest = row and nn(row.latest) }
 end
 
 -- GET /api/feed/following -- confirmed live-404ing: FeedPage.jsx (routed at
@@ -2350,6 +2474,7 @@ function M.update_avatar(req)
   local file_id, err = media_files.save_avatar_file(user.id, upload.content, sha256, sniffed_mime, original_filename)
   if not file_id then return 500, { detail = "Avatar upload failed: " .. tostring(err) } end
 
+  user_cache.invalidate(user.id)
   local refreshed = get_user(user.id)
   refreshed.site_owner = is_site_owner(refreshed)
   return 200, { user = with_user_urls(req, with_derived_accent(refreshed)) }
@@ -2382,6 +2507,7 @@ function M.verify_age(req)
     "UPDATE users SET birthdate=%s, age_verified_at=now(), adult_content_consent=true WHERE id=%s",
     birthdate, tostring(user.id)
   )
+  user_cache.invalidate(user.id)
   local refreshed = get_user(user.id)
   refreshed.site_owner = is_site_owner(refreshed)
   return 200, { user = with_user_urls(req, with_derived_accent(refreshed)) }
@@ -2590,6 +2716,7 @@ function M.discord_verify_confirm(req)
   end
   db.execute("DELETE FROM discord_verifications WHERE user_id=%s", user.id)
 
+  user_cache.invalidate(user.id)
   local refreshed = get_user(user.id)
   refreshed.site_owner = is_site_owner(refreshed)
   return 200, { user = with_user_urls(req, with_derived_accent(refreshed)) }
@@ -2603,6 +2730,7 @@ function M.discord_unlink(req)
     user.id
   )
   db.execute("DELETE FROM discord_verifications WHERE user_id=%s", user.id)
+  user_cache.invalidate(user.id)
   local refreshed = get_user(user.id)
   refreshed.site_owner = is_site_owner(refreshed)
   return 200, { user = with_user_urls(req, with_derived_accent(refreshed)) }
