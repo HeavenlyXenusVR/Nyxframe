@@ -7285,16 +7285,38 @@ function M.serve_media_thumb(req)
     -- false, and the render job silently never launch at all.
     os.execute("mkdir -p " .. shell_quote(cache_dir))
     if claim_thumb_job(marker) then
-      local content = resolve_media_bytes(item)
-      if content then
-        local src_path = original_bytes_cache_path(media_id, item)
-        local tmp_dst = cache_path .. ".tmp.webp"
-        local render_cmd = media_files.render_webp_cmd(src_path, tmp_dst, width, 84, 0.35)
-        os.execute(string.format(
-          "( mkdir -p %s; %s; if [ -s %s ]; then mv -f %s %s; fi; rm -f %s ) >/dev/null 2>&1 &",
-          shell_quote(cache_dir), render_cmd, shell_quote(tmp_dst), shell_quote(tmp_dst), shell_quote(cache_path), shell_quote(marker)
-        ))
+      -- Draws from the SAME global ffmpeg concurrency cap video transcoding
+      -- uses (acquire_transcode_slot/transcode.max_concurrent, benchmarked
+      -- against this box's actual hardware -- see that table's header
+      -- comment), rather than its own separate budget that would simply
+      -- ADD to total concurrent ffmpeg load instead of sharing a ceiling
+      -- already proven safe. This host has gone down once before
+      -- (2026-08-26) from unbounded parallel ffmpeg jobs spawned with no
+      -- cap at all -- a burst of thumbnail cache misses (bulk import,
+      -- cache purge, several viewers opening never-seen videos at once)
+      -- is exactly that failure shape, just for a different job type.
+      local slot_path = acquire_transcode_slot()
+      if slot_path then
+        local content = resolve_media_bytes(item)
+        if content then
+          local src_path = original_bytes_cache_path(media_id, item)
+          local tmp_dst = cache_path .. ".tmp.webp"
+          local render_cmd = media_files.render_webp_cmd(src_path, tmp_dst, width, 84, 0.35)
+          os.execute(string.format(
+            "( %s; if [ -s %s ]; then mv -f %s %s; fi; rm -f %s %s ) >/dev/null 2>&1 &",
+            render_cmd, shell_quote(tmp_dst), shell_quote(tmp_dst), shell_quote(cache_path), shell_quote(marker), shell_quote(slot_path)
+          ))
+        else
+          os.remove(marker)
+          os.execute("rm -f " .. shell_quote(slot_path))
+        end
       else
+        -- Every slot is held by a still-running job right now. Release the
+        -- thumb marker immediately rather than letting it sit claimed for
+        -- nothing until its 120s staleness window expires -- no job
+        -- actually started, so the very next request should be free to
+        -- try again right away, same "degrades gracefully, don't queue"
+        -- philosophy the transcode cap itself already uses.
         os.remove(marker)
       end
     end
@@ -7651,7 +7673,15 @@ end
 -- transcode_slot_claimed_at) instead of forking a `find` per slot index, and
 -- writes the claim timestamp as the file's contents -- `printf` is a shell
 -- builtin, so the claim still costs exactly the one shell it always did.
-local function acquire_transcode_slot(prefix, count)
+-- Deliberately a bare global, not `local function` -- serve_media_thumb
+-- (earlier in this file, see its video-thumbnail branch) needs to call
+-- this, and Lua locals are only visible from their declaration point
+-- onward in source order, so a caller positioned earlier in the chunk
+-- can't see a later `local function` no matter when it actually runs.
+-- Same forward-reference problem (and the same fix) as
+-- fast_start_remux_if_needed elsewhere in this file. Also frees one slot
+-- against this file's 200-top-level-local ceiling instead of costing one.
+acquire_transcode_slot = function(prefix, count)
   local dir = transcode_slots_dir()
   local now = os.time()
   prefix = prefix or "slot_"
