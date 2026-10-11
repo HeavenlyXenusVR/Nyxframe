@@ -3268,11 +3268,18 @@ function M.visual_search_from_media(req)
   local seed = fetch_media_by_id(media_id, viewer_id or "0")
   local vstatus, vbody = ensure_media_visible(seed, viewer_id)
   if vstatus then return vstatus, vbody end
-  if seed.media_kind ~= "image" or (not nn(seed.image_phash) and not nn(seed.image_dhash)) then
+  if seed.media_kind ~= "image" then
+    return 400, { detail = "That post has no visual fingerprint to search with." }
+  end
+  -- fetch_media_by_id's SELECT doesn't carry image_phash/image_dhash (every
+  -- other caller of it has no use for them), so they're fetched separately
+  -- here rather than bloating that shared query for this one route.
+  local hashes = db.fetchone("SELECT image_phash, image_dhash FROM media_items WHERE id=%s", tostring(media_id))
+  if not hashes or (not nn(hashes.image_phash) and not nn(hashes.image_dhash)) then
     return 400, { detail = "That post has no visual fingerprint to search with." }
   end
 
-  local results = run_visual_search(req, { image_phash = seed.image_phash, image_dhash = seed.image_dhash },
+  local results = run_visual_search(req, { image_phash = hashes.image_phash, image_dhash = hashes.image_dhash },
     viewer_id, adult_allowed, media_id)
   return 200, { media = arr(results) }
 end
