@@ -179,6 +179,15 @@ export function UploadPage({ ctx }) {
   const [analysis, setAnalysis] = useState(null);
   const [duplicates, setDuplicates] = useState([]);
   const dragDepth = useRef(0);
+  // Batch upload: form.file stays the one file with full manual editing
+  // (title/description/AI-analyze preview/duplicate-check) exactly as
+  // before -- these are the REST of a multi-file pick/drop, each one
+  // sharing this same form's category/subcategories/tags/visibility/
+  // toggles/publish_at but with NO shared title/description (auto_ai, if
+  // on, fills those in per-file instead -- a batch of distinct images
+  // all getting the one typed-in title would be wrong, not a convenience).
+  const [extraFiles, setExtraFiles] = useState([]); // [{ id, file, status: pending|uploading|done|error, error }]
+  const extraFileIdRef = useRef(0);
 
   useEffect(() => {
     setMediaInfo(null);
@@ -222,6 +231,33 @@ export function UploadPage({ ctx }) {
     update("file", file);
   }
 
+  // Shared by the file input (now `multiple`) and multi-file drag/drop:
+  // the first accepted file becomes the primary file (unchanged manual-
+  // editing flow); anything beyond that joins the batch queue below it.
+  function pickFiles(fileList) {
+    const files = [...(fileList || [])].filter(isAcceptedFile);
+    if (!files.length) {
+      if (fileList?.length) ctx.showToast("Only image and video files can be uploaded.", "error");
+      return;
+    }
+    const [first, ...rest] = files;
+    if (!form.file) {
+      update("file", first);
+    } else {
+      rest.unshift(first);
+    }
+    if (rest.length) {
+      setExtraFiles((current) => [
+        ...current,
+        ...rest.map((file) => ({ id: ++extraFileIdRef.current, file, status: "pending", error: "" })),
+      ]);
+    }
+  }
+
+  function removeExtraFile(id) {
+    setExtraFiles((current) => current.filter((row) => row.id !== id));
+  }
+
   // The whole page is a drop target. dragenter/dragleave fire for every
   // child element crossed, so count depth instead of trusting relatedTarget.
   function handleDragEnter(event) {
@@ -246,7 +282,7 @@ export function UploadPage({ ctx }) {
     event.preventDefault();
     dragDepth.current = 0;
     setDragActive(false);
-    pickFile(event.dataTransfer?.files?.[0]);
+    pickFiles(event.dataTransfer?.files);
   }
 
   function update(key, value) {
@@ -317,18 +353,14 @@ export function UploadPage({ ctx }) {
     }
   }
 
-  async function submit(event) {
-    event.preventDefault();
-    if (!form.file) return ctx.showToast("Choose a file first.", "error");
-    if (form.file.size > MAX_UPLOAD_BYTES) return ctx.showToast(`This file is over the ${formatBytes(MAX_UPLOAD_BYTES)} upload limit.`, "error");
-    if (duplicates.length) {
-      const proceed = window.confirm(
-        `This looks similar to ${duplicates.length} post${duplicates.length === 1 ? "" : "s"} already in your library. Upload anyway?`,
-      );
-      if (!proceed) return;
-    }
-    setBusy(true);
-    setUploadProgress(0);
+  // Core of the old submit(): upload exactly one `file` with the given
+  // title/description plus every OTHER field shared off `form`
+  // (category/tags/visibility/toggles/publish_at/source_url). Extracted
+  // so the batch queue below can call this once per queued file instead
+  // of duplicating the direct-vs-chunked branching a second time. Returns
+  // the parsed response; throws on failure -- callers decide what to do
+  // with either, same contract xhrJson/apiFetch already have.
+  async function uploadOneFile(file, { title, description }, onProgress) {
     const uploadT0 = performance.now();
     let uploadMethod = "direct";
     let chunkCount = 0;
@@ -336,16 +368,16 @@ export function UploadPage({ ctx }) {
       outcome,
       method: uploadMethod,
       duration_ms: Math.round(performance.now() - uploadT0),
-      bytes: form.file.size,
+      bytes: file.size,
       chunk_count: chunkCount || undefined,
       retry_count: 0, // no chunk-retry logic exists yet -- see xhrJson's single-attempt send
       error_message: errorMessage,
     });
     try {
       const body = new FormData();
-      if (form.file) body.set("file", form.file);
-      body.set("title", form.title);
-      body.set("description", form.description);
+      body.set("file", file);
+      body.set("title", title);
+      body.set("description", description);
       if (form.source_url.trim()) body.set("source_url", form.source_url.trim());
       const placement = resolvePlacement(ctx.lookups.categories, form.category, form.subcategories);
       body.set("category_id", placement.categoryId);
@@ -365,12 +397,12 @@ export function UploadPage({ ctx }) {
       if (form.publish_at) body.set("publish_at", new Date(form.publish_at).toISOString());
 
       let data;
-      if (form.file.size <= EDGE_SAFE_UPLOAD_BYTES) {
+      if (file.size <= EDGE_SAFE_UPLOAD_BYTES) {
         const url = await resolveApiUrl("/api/media");
         data = await xhrJson(url, {
           body,
           onProgress: (progressEvent) => {
-            if (progressEvent.lengthComputable) setUploadProgress(Math.round((progressEvent.loaded / progressEvent.total) * 100));
+            if (progressEvent.lengthComputable) onProgress?.(Math.round((progressEvent.loaded / progressEvent.total) * 100));
           },
         });
       } else {
@@ -378,24 +410,24 @@ export function UploadPage({ ctx }) {
         const init = await apiFetch("/api/media/upload/init", {
           method: "POST",
           timeoutMs: UPLOAD_TIMEOUT_MS,
-          body: JSON.stringify({ total_size: form.file.size, filename: form.file.name }),
+          body: JSON.stringify({ total_size: file.size, filename: file.name }),
         });
         const chunkSize = Number(init.chunk_size) > 0 ? Number(init.chunk_size) : DEFAULT_CHUNK_BYTES;
         const initUrl = await resolveApiUrl("/api/media/upload/chunk");
         let uploaded = 0;
-        for (let index = 0; uploaded < form.file.size; index += 1) {
-          const chunk = form.file.slice(uploaded, Math.min(uploaded + chunkSize, form.file.size));
+        for (let index = 0; uploaded < file.size; index += 1) {
+          const chunk = file.slice(uploaded, Math.min(uploaded + chunkSize, file.size));
           await xhrJson(`${initUrl}?session_id=${encodeURIComponent(init.session_id)}&index=${index}`, {
             body: chunk,
             contentType: "application/octet-stream",
             onProgress: (progressEvent) => {
               const chunkLoaded = progressEvent.lengthComputable ? progressEvent.loaded : 0;
-              setUploadProgress(Math.round(((uploaded + chunkLoaded) / form.file.size) * 100));
+              onProgress?.(Math.round(((uploaded + chunkLoaded) / file.size) * 100));
             },
           });
           uploaded += chunk.size;
           chunkCount += 1;
-          setUploadProgress(Math.round((uploaded / form.file.size) * 100));
+          onProgress?.(Math.round((uploaded / file.size) * 100));
         }
         const metadata = Object.fromEntries([...body.entries()].filter(([key]) => key !== "file"));
         data = await apiFetch("/api/media/upload/finish", {
@@ -412,49 +444,99 @@ export function UploadPage({ ctx }) {
           body: JSON.stringify({
             ...metadata,
             session_id: init.session_id,
-            total_size: form.file.size,
+            total_size: file.size,
           }),
         });
       }
+      reportUploadDiagnostic("success");
+      return data;
+    } catch (error) {
+      reportUploadDiagnostic("error", String(error.message || "").slice(0, 300));
+      throw error;
+    }
+  }
+
+  async function submit(event) {
+    event.preventDefault();
+    if (!form.file) return ctx.showToast("Choose a file first.", "error");
+    if (form.file.size > MAX_UPLOAD_BYTES) return ctx.showToast(`This file is over the ${formatBytes(MAX_UPLOAD_BYTES)} upload limit.`, "error");
+    for (const row of extraFiles) {
+      if (row.file.size > MAX_UPLOAD_BYTES) {
+        return ctx.showToast(`"${row.file.name}" is over the ${formatBytes(MAX_UPLOAD_BYTES)} upload limit.`, "error");
+      }
+    }
+    if (duplicates.length) {
+      const proceed = window.confirm(
+        `This looks similar to ${duplicates.length} post${duplicates.length === 1 ? "" : "s"} already in your library. Upload anyway?`,
+      );
+      if (!proceed) return;
+    }
+    setBusy(true);
+    setUploadProgress(0);
+    const hasBatch = extraFiles.length > 0;
+    try {
+      const data = await uploadOneFile(form.file, { title: form.title, description: form.description }, setUploadProgress);
 
       if (data.status === "processing") {
         // Chunk upload finished and the fast dry-run (file type, visibility,
         // publish date, title/category unless AI auto-fill covers them)
         // passed -- the slow part (remux/hash/AI/save) is now running in a
-        // background thread server-side. No reason to keep the uploader
-        // sitting on this page for that: hand off to Shell's job poller
-        // (survives navigation/reload since it's localStorage-backed) and
-        // leave immediately.
+        // background thread server-side. Hand off to Shell's job poller
+        // (survives navigation/reload since it's localStorage-backed).
         addPendingUploadJob({ jobId: data.job_id, filename: form.file.name });
-        ctx.showToast("Upload queued — processing in the background. We'll let you know when it's ready.", "info");
-        // "success" here means the upload itself (the part this page and its
-        // timing actually cover) went through -- the background finish job's
-        // own outcome is separately covered by routes.lua's "upload"/
-        // "chunked" telemetry.record call once it completes.
-        reportUploadDiagnostic("success");
-        navigate("/profile");
+        if (!hasBatch) {
+          ctx.showToast("Upload queued — processing in the background. We'll let you know when it's ready.", "info");
+          navigate("/profile");
+          return;
+        }
+      } else if (!hasBatch) {
+        clearApiCache();
+        ctx.refreshLookups();
+        if (!duplicates.length && data.possible_duplicates?.length) {
+          ctx.showToast(
+            `Uploaded — heads up, ${data.possible_duplicates.length} similar post${data.possible_duplicates.length === 1 ? "" : "s"} already exist in your library.`,
+            "info",
+          );
+        } else if (data.possible_site_duplicates?.length) {
+          ctx.showToast(
+            `Uploaded — heads up, ${data.possible_site_duplicates.length} similar post${data.possible_site_duplicates.length === 1 ? "" : "s"} already exist elsewhere on the site.`,
+            "info",
+          );
+        } else {
+          ctx.showToast("Upload saved.", "success");
+        }
+        navigate(`/media/${data.media.id}`);
         return;
       }
 
+      // Batch mode: the primary file is in, now work through the queue.
+      // One failing file marks itself "error" and does NOT abort the rest
+      // -- a typo'd file somewhere in a 10-file drop shouldn't cost the
+      // other 9 their upload.
+      let succeeded = 1;
+      let failed = 0;
+      for (const row of extraFiles) {
+        setExtraFiles((current) => current.map((r) => (r.id === row.id ? { ...r, status: "uploading" } : r)));
+        try {
+          const rowData = await uploadOneFile(row.file, { title: "", description: "" });
+          if (rowData.status === "processing") {
+            addPendingUploadJob({ jobId: rowData.job_id, filename: row.file.name });
+          }
+          succeeded += 1;
+          setExtraFiles((current) => current.map((r) => (r.id === row.id ? { ...r, status: "done" } : r)));
+        } catch (rowError) {
+          failed += 1;
+          setExtraFiles((current) => current.map((r) => (r.id === row.id ? { ...r, status: "error", error: rowError.message } : r)));
+        }
+      }
       clearApiCache();
       ctx.refreshLookups();
-      if (!duplicates.length && data.possible_duplicates?.length) {
-        ctx.showToast(
-          `Uploaded — heads up, ${data.possible_duplicates.length} similar post${data.possible_duplicates.length === 1 ? "" : "s"} already exist in your library.`,
-          "info",
-        );
-      } else if (data.possible_site_duplicates?.length) {
-        ctx.showToast(
-          `Uploaded — heads up, ${data.possible_site_duplicates.length} similar post${data.possible_site_duplicates.length === 1 ? "" : "s"} already exist elsewhere on the site.`,
-          "info",
-        );
-      } else {
-        ctx.showToast("Upload saved.", "success");
-      }
-      reportUploadDiagnostic("success");
-      navigate(`/media/${data.media.id}`);
+      ctx.showToast(
+        failed ? `Uploaded ${succeeded} of ${succeeded + failed} files — ${failed} failed.` : `All ${succeeded} files uploaded.`,
+        failed ? "info" : "success",
+      );
+      navigate("/profile");
     } catch (error) {
-      reportUploadDiagnostic("error", String(error.message || "").slice(0, 300));
       ctx.showToast(error.message, "error");
       setUploadProgress(0);
     } finally {
@@ -512,11 +594,11 @@ export function UploadPage({ ctx }) {
         <aside className="upload-media">
           {!form.file ? (
             <label className="upload-dropzone">
-              <input type="file" accept="image/*,video/*" onChange={(event) => { pickFile(event.target.files?.[0]); event.target.value = ""; }} />
+              <input type="file" accept="image/*,video/*" multiple onChange={(event) => { pickFiles(event.target.files); event.target.value = ""; }} />
               <span className="upload-dropzone-icon"><Upload size={28} /></span>
               <strong>Drop an image or video</strong>
-              <span className="upload-dropzone-cta">Choose a file</span>
-              <small>Images, GIFs and videos · up to {formatBytes(MAX_UPLOAD_BYTES)}</small>
+              <span className="upload-dropzone-cta">Choose files</span>
+              <small>Images, GIFs and videos · up to {formatBytes(MAX_UPLOAD_BYTES)} each · pick or drop more than one to batch-upload</small>
               <small className="upload-dropzone-paste"><Clipboard size={13} />You can also paste an image</small>
             </label>
           ) : (
@@ -559,6 +641,46 @@ export function UploadPage({ ctx }) {
               </div>
             </div>
           )}
+
+          {form.file ? (
+            <div className="upload-batch-queue">
+              <div className="upload-batch-head">
+                <span>Also uploading {extraFiles.length ? `(${extraFiles.length})` : ""}</span>
+                <label className={`button-link${uploading ? " is-disabled" : ""}`}>
+                  + Add more files
+                  <input type="file" accept="image/*,video/*" multiple disabled={uploading} onChange={(event) => { pickFiles(event.target.files); event.target.value = ""; }} />
+                </label>
+              </div>
+              {extraFiles.length ? (
+                <p className="field-hint">
+                  These share this form's category, tags, visibility and other settings below — not the title/description above,
+                  which only applies to the file shown. Leave "AI metadata" on to have each one titled and tagged individually.
+                </p>
+              ) : null}
+              {extraFiles.length ? (
+                <ul className="upload-batch-list">
+                  {extraFiles.map((row) => (
+                    <li key={row.id} className={`upload-batch-item status-${row.status}`}>
+                      {row.file.type.startsWith("video") ? <FileVideo size={15} /> : <FileImage size={15} />}
+                      <span className="upload-batch-name" title={row.file.name}>{row.file.name}</span>
+                      <span className="upload-batch-size">{formatBytes(row.file.size)}</span>
+                      <span className="upload-batch-status">
+                        {row.status === "pending" ? "Queued" : null}
+                        {row.status === "uploading" ? "Uploading…" : null}
+                        {row.status === "done" ? "Done" : null}
+                        {row.status === "error" ? (row.error || "Failed") : null}
+                      </span>
+                      {row.status === "pending" || row.status === "error" ? (
+                        <button type="button" className="icon-button" onClick={() => removeExtraFile(row.id)} disabled={uploading} title="Remove">
+                          <Trash2 size={14} />
+                        </button>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
 
           <section className="upload-ai" aria-label="AI auto-fill">
             <div className="upload-ai-copy">

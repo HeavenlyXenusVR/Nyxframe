@@ -7,6 +7,7 @@ local httpd = require("httpd")
 local db = require("db")
 local config = require("config")
 local routes = require("routes")
+local webpush = require("webpush")
 local video_extras = require("video_extras")
 local static = require("static")
 local pages_auth = require("pages_auth")
@@ -17,6 +18,12 @@ local telemetry = require("telemetry")
 
 local settings = config.load()
 routes.settings = settings
+-- webpush.lua is a leaf module (no require("routes"), see its own header
+-- comment) -- it gets what little config it needs (where to persist the
+-- generated VAPID keypair, the JWT `sub` contact claim) as plain fields,
+-- same wiring style httpd.trusted_proxy_cidrs/httpd.cors already use below.
+webpush.uploads_dir = settings.uploads_dir
+webpush.vapid_subject = os.getenv("GALLERY_VAPID_SUBJECT") or "mailto:admin@localhost"
 db.init(settings)
 require("discord_bot").init(settings)
 
@@ -87,6 +94,7 @@ httpd.route("POST", "/api/auth/2fa/verify", routes.verify_2fa)
 httpd.route("POST", "/api/auth/logout", routes.logout)
 httpd.route("GET", "/api/me", routes.me)
 httpd.route("GET", "/api/me/media", routes.my_media)
+httpd.route("GET", "/api/me/on-this-day", routes.on_this_day)
 httpd.route("GET", "/api/me/stats", routes.creator_stats)
 httpd.route("GET", "/api/me/likes", routes.feed_liked)
 httpd.route("GET", "/api/feed/following", routes.feed_following)
@@ -122,6 +130,7 @@ httpd.route("POST", "/api/media/upload/finish", routes.upload_chunk_finish)
 httpd.route("GET", "/api/media/upload/job/:job_id", routes.upload_job_status)
 httpd.route("POST", "/api/media/upload/diagnostics", routes.upload_client_diagnostic)
 httpd.route("GET", "/api/media/trending", routes.media_trending)
+httpd.route("GET", "/api/media/random", routes.media_random)
 -- ROUTE-ORDERING TRAP for future passes: httpd.lua's match_route() returns
 -- the FIRST registered route whose pattern matches, with no most-specific-
 -- wins logic. "/api/media/:media_id" below matches ANY single path segment
@@ -135,10 +144,13 @@ httpd.route("GET", "/api/media/:media_id", routes.media_detail)
 httpd.route("PATCH", "/api/media/:media_id", routes.update_media)
 httpd.route("DELETE", "/api/media/:media_id", routes.delete_media)
 httpd.route("POST", "/api/media/:media_id/like", routes.like_media)
+httpd.route("POST", "/api/media/:media_id/viewing", routes.media_viewing_heartbeat)
 httpd.route("POST", "/api/media/:media_id/bookmark", routes.bookmark_media)
 httpd.route("POST", "/api/media/:media_id/comments", routes.add_comment)
 httpd.route("POST", "/api/media/:media_id/react", routes.react_to_media_route)
 httpd.route("GET", "/api/media/:media_id/similar", routes.similar_media)
+httpd.route("GET", "/api/media/:media_id/visual-similar", routes.visual_search_from_media)
+httpd.route("GET", "/api/media/:media_id/history", routes.media_edit_history)
 httpd.route("PATCH", "/api/media/:media_id/controls", routes.set_media_controls)
 httpd.route("POST", "/api/media/:media_id/restore", routes.restore_media)
 httpd.route("POST", "/api/media/:media_id/report", routes.report_media)
@@ -149,6 +161,7 @@ httpd.route("GET", "/api/me/personal-tags", routes.my_personal_tags)
 httpd.route("POST", "/api/media/:media_id/personal-tags", routes.add_personal_tag)
 httpd.route("DELETE", "/api/media/:media_id/personal-tags/:tag", routes.remove_personal_tag)
 httpd.route("DELETE", "/api/comments/:comment_id", routes.delete_comment)
+httpd.route("POST", "/api/comments/:comment_id/react", routes.react_to_comment_route)
 
 httpd.route("GET", "/api/media/:media_id/thumb", routes.serve_media_thumb)
 httpd.route("GET", "/api/media/:media_id/file", routes.serve_media_file)
@@ -192,6 +205,7 @@ httpd.route("GET", "/api/projects/nyxframe/download", routes.download_nyxframe)
 -- elsewhere in this file), and "/api/users/:username/profile" before the
 -- bare "/api/users/:username" for the same reason.
 httpd.route("GET", "/api/users/search", routes.search_users)
+httpd.route("POST", "/api/search/visual", routes.visual_search)
 httpd.route("GET", "/api/users/:username/profile", routes.profile_page)
 httpd.route("GET", "/api/users/:username", routes.public_profile)
 httpd.route("POST", "/api/users/:user_id/follow", routes.follow_user)
@@ -217,6 +231,9 @@ httpd.route("GET", "/api/notifications", routes.notifications_list)
 httpd.route("GET", "/api/notifications/unread-count", routes.notifications_unread_count)
 httpd.route("POST", "/api/notifications/read-all", routes.notifications_mark_all_read)
 httpd.route("POST", "/api/notifications/:notification_id/read", routes.notifications_mark_read)
+httpd.route("GET", "/api/push/vapid-public-key", routes.push_vapid_public_key)
+httpd.route("POST", "/api/push/subscribe", routes.push_subscribe)
+httpd.route("POST", "/api/push/unsubscribe", routes.push_unsubscribe)
 
 -- "/threads" MUST be registered before "/api/messages/:user_id" (same
 -- first-match-wins ordering trap noted above for /api/media/:media_id).

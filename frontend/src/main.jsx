@@ -45,6 +45,18 @@ if ("serviceWorker" in navigator && !window.location.hostname.endsWith("github.i
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("/service-worker.js").catch(() => {});
   });
+  // Clicking a push notification (service-worker.js's notificationclick)
+  // posts {type:"navigate", url} to an already-open tab instead of
+  // navigating it directly -- a service worker has no access to this
+  // page's react-router instance, so it hands off here. A hard navigation
+  // (not useNavigate) is deliberate: this listener sits outside the
+  // Router entirely, and a full load is a reasonable, simple trade-off for
+  // what's already a rare, intentional jump rather than in-app browsing.
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    if (event.data?.type === "navigate" && typeof event.data.url === "string") {
+      window.location.href = event.data.url;
+    }
+  });
 }
 
 document.addEventListener("contextmenu", (event) => {

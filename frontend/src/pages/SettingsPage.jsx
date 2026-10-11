@@ -48,6 +48,10 @@ export function SettingsPage({ ctx }) {
   const [newApiKey, setNewApiKey] = useState(null);
   const [visionStatus, setVisionStatus] = useState(null);
   const [exportingTraining, setExportingTraining] = useState(false);
+  const [pushSupported, setPushSupported] = useState(false);
+  const [pushSubscribed, setPushSubscribed] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushBlocked, setPushBlocked] = useState(false);
 
   const refreshBlocks = useCallback(async () => {
     try {
@@ -165,6 +169,69 @@ export function SettingsPage({ ctx }) {
       ctx.showToast(error.message, "error");
     } finally {
       setExporting(false);
+    }
+  }
+
+  // Web Push: not a stored user_setting -- subscribe state lives in the
+  // BROWSER's own PushManager plus the push_subscriptions row it's synced
+  // to, not in the user_settings JSON blob everything else on this page
+  // reads/writes through `prefs`/updatePrefs.
+  useEffect(() => {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    if (Notification.permission === "denied") setPushBlocked(true);
+    setPushSupported(true);
+    navigator.serviceWorker.ready
+      .then((registration) => registration.pushManager.getSubscription())
+      .then((subscription) => setPushSubscribed(Boolean(subscription)))
+      .catch(() => {});
+  }, []);
+
+  function urlBase64ToUint8Array(base64url) {
+    const padding = "=".repeat((4 - (base64url.length % 4)) % 4);
+    const base64 = (base64url + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const raw = window.atob(base64);
+    return Uint8Array.from([...raw].map((char) => char.charCodeAt(0)));
+  }
+
+  async function enablePush() {
+    setPushBusy(true);
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") {
+        setPushBlocked(permission === "denied");
+        return;
+      }
+      const registration = await navigator.serviceWorker.ready;
+      const { key } = await apiFetch("/api/push/vapid-public-key");
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(key),
+      });
+      await apiFetch("/api/push/subscribe", { method: "POST", body: JSON.stringify(subscription.toJSON()) });
+      setPushSubscribed(true);
+      ctx.showToast("Push notifications enabled.", "success");
+    } catch (error) {
+      ctx.showToast(error.message, "error");
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
+  async function disablePush() {
+    setPushBusy(true);
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+      if (subscription) {
+        await apiFetch("/api/push/unsubscribe", { method: "POST", body: JSON.stringify({ endpoint: subscription.endpoint }) });
+        await subscription.unsubscribe();
+      }
+      setPushSubscribed(false);
+      ctx.showToast("Push notifications disabled.", "success");
+    } catch (error) {
+      ctx.showToast(error.message, "error");
+    } finally {
+      setPushBusy(false);
     }
   }
 
@@ -530,7 +597,10 @@ export function SettingsPage({ ctx }) {
               <label className="field"><span>Sort</span><select value={prefs.default_sort} onChange={(event) => updatePrefs("default_sort", event.target.value)}><option value="new">Newest</option><option value="popular">Popular</option><option value="views">Views</option><option value="downloads">Downloads</option><option value="old">Oldest</option></select></label>
             </div>
             <div className="two-col">
+              <label className="field"><span>Grid layout</span><select value={prefs.grid_layout ?? "grid"} onChange={(event) => updatePrefs("grid_layout", event.target.value)}><option value="grid">Fixed grid</option><option value="masonry">Masonry</option></select></label>
               <label className="field"><span>Items</span><input type="number" min="12" max="60" value={prefs.items_per_page} onChange={(event) => updatePrefs("items_per_page", Number(event.target.value))} /></label>
+            </div>
+            <div className="two-col">
               <label className="field"><span>Profile layout</span><select value={prefs.profile_layout} onChange={(event) => updatePrefs("profile_layout", event.target.value)}><option value="spotlight">Spotlight</option><option value="magazine">Magazine</option><option value="stack">Stack</option><option value="split">Split</option><option value="mosaic">Mosaic</option><option value="timeline">Timeline</option></select></label>
             </div>
           </div>
@@ -775,6 +845,25 @@ export function SettingsPage({ ctx }) {
               </div>
             ) : (
               <EmptyState title="No blocked or muted accounts" />
+            )}
+          </div>
+          <div className="side-box stacked-form settings-form-card">
+            <h2><Bell size={18} /> Push Notifications</h2>
+            {!pushSupported ? (
+              <p className="field-hint">Your browser doesn't support push notifications.</p>
+            ) : pushBlocked ? (
+              <p className="field-hint">Notifications are blocked for this site in your browser settings — allow them there to enable this.</p>
+            ) : (
+              <>
+                <p>Get a browser/device notification for new followers, likes, comments, messages, and uploads from people you follow — even when the site isn't open.</p>
+                <div className="form-actions settings-actions">
+                  {pushSubscribed ? (
+                    <button type="button" onClick={disablePush} disabled={pushBusy}><Bell size={16} />{pushBusy ? "Working..." : "Disable push notifications"}</button>
+                  ) : (
+                    <button type="button" onClick={enablePush} disabled={pushBusy}><Bell size={16} />{pushBusy ? "Working..." : "Enable push notifications"}</button>
+                  )}
+                </div>
+              </>
             )}
           </div>
           <div className="side-box stacked-form settings-form-card">

@@ -22,6 +22,13 @@
 
 local cjson = require("cjson.safe")
 local db = require("db")
+-- Bare global, not `local` -- this file is already at LuaJIT's hard
+-- 200-local-per-chunk ceiling (see the file's existing notes on this, e.g.
+-- range_io/acquire_transcode_slot), so a new top-level local here simply
+-- fails to compile. webpush.lua itself has no require("routes") anywhere
+-- (it's a leaf module, see its own header comment), so there's no cycle to
+-- avoid either way -- this could be a real local in a file with headroom.
+webpush = require("webpush")
 local gauth = require("gallery_auth")
 local ratelimit = require("ratelimit")
 local totp = require("totp")
@@ -1686,6 +1693,63 @@ function M.my_media(req)
   return 200, { media = arr(rows) }
 end
 
+-- GET /api/me/on-this-day -- Studio dashboard nostalgia card: this
+-- account's own posts from exactly this month/day in a previous year. No
+-- visibility filter -- same "it's the owner looking at their OWN media"
+-- rationale M.my_media's header comment already gives -- but DOES exclude
+-- deleted posts (unlike my_media's include_deleted=true default), since
+-- resurfacing something the owner deliberately deleted isn't "nostalgia,"
+-- it's a bug. EXTRACT(MONTH/DAY FROM ...) rather than a date-range compare:
+-- a plain `created_at::date = (now() - interval '1 year')::date` style
+-- comparison would have to repeat once per year to look back more than
+-- one year, where EXTRACT matches every past year in one pass. Feb 29 on
+-- a non-leap "today" simply matches nothing that year, which is correct
+-- (there's no Feb 29 to compare it to), not a bug to special-case around.
+function M.on_this_day(req)
+  local user, auth, status, body = current_user(req)
+  if not user then return status, body end
+  local viewer_can_open_adult = nn(user.age_verified_at) ~= nil and user.adult_content_consent
+  local viewer0 = tostring(user.id)
+
+  local sql = string.format(
+    [[
+      SELECT m.id, m.user_id, m.category_id, m.subcategory_id, m.title, m.description, m.tags,
+             m.media_kind, m.mime_type, m.original_filename, m.storage_path, m.file_size,
+             m.views, m.downloads, m.created_at, m.updated_at, m.visibility,
+             m.comments_enabled, m.downloads_enabled, m.pinned_at, m.is_adult,
+             m.adult_marked_by_user, m.adult_marked_by_ai, m.moderation_status, m.dominant_color, m.source_url,
+             c.name AS category_name, c.slug AS category_slug,
+             sc.name AS subcategory_name, sc.slug AS subcategory_slug,
+             u.username, u.display_name, u.profile_color, u.public_profile,
+             (SELECT COUNT(DISTINCT lk.user_id) FROM media_likes lk WHERE lk.media_id = m.id) AS like_count,
+             (SELECT COUNT(*) FROM media_comments cmc WHERE cmc.media_id = m.id) AS comment_count,
+             CASE WHEN EXISTS (SELECT 1 FROM media_bookmarks b WHERE b.media_id = m.id AND b.user_id::text = %%s) THEN 1 ELSE 0 END AS bookmarked_by_me,
+             CASE WHEN EXISTS (SELECT 1 FROM media_likes l2 WHERE l2.media_id = m.id AND l2.user_id::text = %%s) THEN 1 ELSE 0 END AS liked_by_me,
+             EXTRACT(YEAR FROM m.created_at)::int AS years_ago_source
+      FROM media_items m
+      JOIN categories c ON c.id = m.category_id
+      LEFT JOIN subcategories sc ON sc.id = m.subcategory_id
+      JOIN users u ON u.id = m.user_id
+      WHERE m.user_id=%%s AND m.deleted_at IS NULL
+        AND EXTRACT(MONTH FROM m.created_at) = EXTRACT(MONTH FROM now())
+        AND EXTRACT(DAY FROM m.created_at) = EXTRACT(DAY FROM now())
+        AND EXTRACT(YEAR FROM m.created_at) < EXTRACT(YEAR FROM now())
+      ORDER BY m.created_at DESC
+      LIMIT 40
+    ]]
+  )
+  local rows, err = db.fetchall(sql, viewer0, viewer0, viewer0)
+  if err then return 500, { detail = "Query failed: " .. tostring(err) } end
+  attach_media_subcategories(rows)
+  local this_year = tonumber(os.date("*t").year)
+  for _, row in ipairs(rows) do
+    decode_media_row(row, viewer_can_open_adult, req)
+    row.years_ago = this_year - db.toint(row.years_ago_source, this_year)
+    row.years_ago_source = nil
+  end
+  return 200, { media = arr(rows) }
+end
+
 -- GET /api/me/stats -- Creator analytics dashboard data source. Two parts:
 -- (1) top_posts: the creator's own non-deleted media ranked by views, same
 -- join shape as M.my_media above (likes/comments/bookmarks) just re-ordered
@@ -1818,6 +1882,49 @@ local function viewer_adult_allowed(viewer_id)
   if not viewer_id then return false end
   local viewer = get_user(viewer_id)
   return viewer ~= nil and nn(viewer.age_verified_at) ~= nil and viewer.adult_content_consent
+end
+
+-- GET /api/media/random -- confirmed live-404ing: DiscoverPage.jsx's
+-- "Surprise me" button has always called this, never registered/ported.
+-- Picks one random id the viewer is actually allowed to see (same
+-- visibility/block/adult-content rules as every other browsing surface),
+-- then reuses fetch_media_by_id + decode_media_row for the response shape
+-- every other single-item route already returns -- the frontend only
+-- reads `data.media.id` (navigates to the detail page, which re-fetches
+-- the full item itself), but returning the full decorated row costs
+-- nothing extra and keeps this endpoint consistent with its siblings.
+-- ORDER BY random() is a full-table sort, not an index scan -- fine at
+-- this site's current scale (~3300 public rows) and simpler/more exactly
+-- uniform than a two-query id-range-then-pick approach; revisit only if
+-- the table grows by orders of magnitude.
+function M.media_random(req)
+  local auth = auth_optional(req)
+  local viewer_id = auth and tostring(auth.id) or nil
+  local viewer0 = viewer_id or "0"
+  local viewer_can_open_adult = viewer_adult_allowed(viewer_id)
+
+  local clauses = {
+    "m.deleted_at IS NULL",
+    "m.visibility='public'",
+    "(m.publish_at IS NULL OR m.publish_at <= now())",
+  }
+  local params = {}
+  if viewer_id then
+    clauses[#clauses + 1] = "m.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id=%s)"
+    params[#params + 1] = viewer0
+  end
+  if not viewer_can_open_adult then
+    clauses[#clauses + 1] = "m.is_adult=false"
+  end
+
+  local sql = "SELECT m.id FROM media_items m WHERE " .. table.concat(clauses, " AND ") .. " ORDER BY random() LIMIT 1"
+  local row, err = db.fetchone(sql, unpack(params))
+  if err then return 500, { detail = "Query failed: " .. tostring(err) } end
+  if not row then return 404, { detail = "No media available." } end
+
+  local item = fetch_media_by_id(db.toint(row.id, row.id), viewer0)
+  if not item then return 404, { detail = "Media not found." } end
+  return 200, { media = decode_media_row(item, viewer_can_open_adult, req) }
 end
 
 -- "Related media": scored by tag overlap (reusing the same jsonb `?|`
@@ -1967,6 +2074,44 @@ function M.media_detail(req)
     if c.parent_comment_id then c.parent_comment_id = db.toint(c.parent_comment_id, c.parent_comment_id) end
   end
 
+  -- Per-comment reaction counts, batched as 1-2 queries total (not one per
+  -- comment) -- same IN-list-over-already-fetched-ids shape
+  -- attach_media_subcategories uses elsewhere in this file for the same
+  -- N+1-avoidance reason.
+  if #comments > 0 then
+    local comment_ids, id_placeholders = {}, {}
+    for i, c in ipairs(comments) do
+      comment_ids[i] = tostring(c.id)
+      id_placeholders[i] = "%s"
+      c.reactions = { counts = {}, my_reaction = nil }
+    end
+    local in_list = table.concat(id_placeholders, ",")
+    local cr_rows = db.fetchall(
+      "SELECT comment_id, emoji, COUNT(*) AS n FROM media_comment_reactions WHERE comment_id IN (" .. in_list .. ") GROUP BY comment_id, emoji",
+      unpack(comment_ids)
+    )
+    local counts_by_comment = {}
+    for _, r in ipairs(cr_rows) do
+      local cid = db.toint(r.comment_id, r.comment_id)
+      counts_by_comment[cid] = counts_by_comment[cid] or {}
+      counts_by_comment[cid][r.emoji] = db.toint(r.n, 0)
+    end
+    local mine_by_comment = {}
+    if viewer_id then
+      local mine_rows = db.fetchall(
+        "SELECT comment_id, emoji FROM media_comment_reactions WHERE user_id=%s AND comment_id IN (" .. in_list .. ")",
+        viewer_id, unpack(comment_ids)
+      )
+      for _, r in ipairs(mine_rows) do
+        mine_by_comment[db.toint(r.comment_id, r.comment_id)] = r.emoji
+      end
+    end
+    for _, c in ipairs(comments) do
+      c.reactions.counts = counts_by_comment[c.id] or {}
+      c.reactions.my_reaction = mine_by_comment[c.id]
+    end
+  end
+
   local reaction_rows = db.fetchall(
     "SELECT emoji, COUNT(*) AS n FROM media_reactions WHERE media_id=%s GROUP BY emoji ORDER BY n DESC",
     tostring(media_id)
@@ -1998,6 +2143,42 @@ function M.media_detail(req)
     similar = arr(similar),
     personal_tags = arr(personal_tags),
   }
+end
+
+-- POST /api/media/:media_id/viewing -- lightweight heartbeat backing the
+-- "N people viewing this now" indicator (media_active_viewers, see
+-- scripts/pg_add_active_viewers.sql). Upserts this viewer's row (so a
+-- repeat heartbeat from the same person/post pair updates one row instead
+-- of growing one per call) and returns the current active count, where
+-- "active" is a read-time age filter (last_seen_at within the last 25s --
+-- a bit more than the frontend's own heartbeat interval, so a single
+-- missed tick doesn't flicker someone out) rather than a separate
+-- disconnect signal: closing the tab without a clean goodbye just ages
+-- out on the next count instead of needing one.
+function M.media_viewing_heartbeat(req)
+  local media_id = tonumber(req.params.media_id)
+  if not media_id then return 404, { detail = "Media not found." } end
+  local auth = auth_optional(req)
+  local viewer_id = auth and tostring(auth.id) or nil
+
+  local item = fetch_media_by_id(media_id, viewer_id or "0")
+  local vstatus, vbody = ensure_media_visible(item, viewer_id)
+  if vstatus then return vstatus, vbody end
+  if item.is_adult and not viewer_adult_allowed(viewer_id) then
+    return 403, { detail = "Age verification required for this 18+ post." }
+  end
+
+  local viewer_key = viewer_id and ("user:" .. viewer_id) or ("ip:" .. client_ip(req))
+  db.execute(
+    "INSERT INTO media_active_viewers (media_id, viewer_key, last_seen_at) VALUES (%s, %s, now()) ON CONFLICT (media_id, viewer_key) DO UPDATE SET last_seen_at=now()",
+    tostring(media_id), viewer_key
+  )
+
+  local row = db.fetchone(
+    "SELECT COUNT(*) AS n FROM media_active_viewers WHERE media_id=%s AND last_seen_at > now() - interval '25 seconds'",
+    tostring(media_id)
+  )
+  return 200, { viewing_now = db.toint(row and row.n, 0) }
 end
 
 -- ---------------------------------------------------------------------------
@@ -2366,6 +2547,56 @@ function M.react_to_media_route(req)
     create_notification(item.user_id, user.id, "reaction", media_id, my_reaction)
   end
   return 200, { reactions = { counts = counts, my_reaction = my_reaction } }
+end
+
+-- Same one-emoji-per-user toggle as M.react_to_media_route above, just
+-- keyed by comment_id (media_comment_reactions, see
+-- scripts/pg_add_comment_reactions.sql) instead of media_id. Visibility is
+-- still checked against the comment's PARENT post, not the comment row
+-- itself -- a comment has no visibility/adult flag of its own, it inherits
+-- whatever post it's attached to, same as every other comment action
+-- (add/delete) already does.
+function M.react_to_comment_route(req)
+  local user, auth, status, body = current_user(req)
+  if not user then return status, body end
+  local comment_id = tonumber(req.params.comment_id)
+  if not comment_id then return 404, { detail = "Comment not found." } end
+  local payload = json_body(req)
+  local emoji = trim(nn(payload.emoji) or ""):sub(1, 16)
+  if emoji == "" then return 400, { detail = "An emoji is required." } end
+
+  local comment = db.fetchone("SELECT id, media_id, user_id FROM media_comments WHERE id=%s", tostring(comment_id))
+  if not comment then return 404, { detail = "Comment not found." } end
+  local media_id = db.toint(comment.media_id, comment.media_id)
+
+  local item = fetch_media_by_id(media_id, tostring(user.id))
+  local vstatus, vbody = ensure_media_visible(item, tostring(user.id))
+  if vstatus then return vstatus, vbody end
+
+  local existing = db.fetchone("SELECT emoji FROM media_comment_reactions WHERE comment_id=%s AND user_id=%s", tostring(comment_id), user.id)
+  if existing and existing.emoji == emoji then
+    db.execute("DELETE FROM media_comment_reactions WHERE comment_id=%s AND user_id=%s", tostring(comment_id), user.id)
+  else
+    db.execute([[
+      INSERT INTO media_comment_reactions (comment_id, user_id, emoji) VALUES (%s, %s, %s)
+      ON CONFLICT (comment_id, user_id) DO UPDATE SET emoji=EXCLUDED.emoji, created_at=now()
+    ]], tostring(comment_id), user.id, emoji)
+  end
+
+  local reaction_rows = db.fetchall(
+    "SELECT emoji, COUNT(*) AS n FROM media_comment_reactions WHERE comment_id=%s GROUP BY emoji ORDER BY n DESC",
+    tostring(comment_id)
+  )
+  local counts = {}
+  for _, r in ipairs(reaction_rows) do counts[r.emoji] = db.toint(r.n, 0) end
+  local mine = db.fetchone("SELECT emoji FROM media_comment_reactions WHERE comment_id=%s AND user_id=%s", tostring(comment_id), user.id)
+  local my_reaction = mine and mine.emoji or nil
+
+  local comment_owner_id = db.toint(comment.user_id, comment.user_id)
+  if comment_owner_id ~= user.id and my_reaction then
+    create_notification(comment_owner_id, user.id, "comment_reaction", media_id, my_reaction)
+  end
+  return 200, { comment_id = comment_id, reactions = { counts = counts, my_reaction = my_reaction } }
 end
 
 -- ---------------------------------------------------------------------------
@@ -2915,6 +3146,137 @@ local function find_possible_duplicates(req, user_id, fingerprint, limit, scope)
   return results
 end
 
+-- Reverse/visual image search: POST a query image (or reference an existing
+-- post via media_id, to reuse its already-stored hash instead of re-hashing)
+-- and get back every visible post whose perceptual hash is close to it.
+-- Reuses exactly the same hex_hamming_distance + visual_*_max_distance
+-- thresholds find_possible_duplicates already uses -- the two features are
+-- the same underlying comparison, just scoped differently (one user's recent
+-- uploads at upload time vs. every visible post, on demand). Unlike
+-- compute_similar_media's deliberate skip of hash comparison for the "more
+-- like this" rail (see its comment above), the whole point here IS the
+-- hash comparison, so the cost is the feature rather than overhead on top
+-- of one -- and at this site's scale (~3300 public rows, per M.media_random's
+-- comment) a full scan is a few thousand cheap XOR+popcount ops, not a
+-- real cost center.
+-- Shared by M.visual_search (fresh upload) and M.visual_search_from_media
+-- (reusing an existing post's stored hash). `exclude_media_id` keeps a
+-- from-existing-post search from returning that same post as its own best
+-- match.
+-- Bare global, not `local`: routes.lua is already at LuaJIT's 200-local-
+-- per-chunk ceiling (see webpush/push above for the established workaround).
+function run_visual_search(req, fingerprint, viewer_id, adult_allowed, exclude_media_id)
+  local viewer0 = viewer_id or "0"
+  local current_phash, current_dhash = nn(fingerprint.image_phash), nn(fingerprint.image_dhash)
+
+  local clauses = {
+    "m.deleted_at IS NULL",
+    "m.media_kind='image'",
+    "(m.image_phash IS NOT NULL OR m.image_dhash IS NOT NULL)",
+    "(m.visibility='public' AND (m.publish_at IS NULL OR m.publish_at <= now()) OR m.user_id=%s)",
+  }
+  local params = { viewer0 }
+  if not adult_allowed then clauses[#clauses + 1] = "m.is_adult=false" end
+  if viewer_id then
+    clauses[#clauses + 1] = "m.user_id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id=%s)"
+    params[#params + 1] = viewer0
+  end
+  if exclude_media_id then
+    clauses[#clauses + 1] = "m.id != %s"
+    params[#params + 1] = tostring(exclude_media_id)
+  end
+
+  local sql = string.format([[
+    SELECT m.id, m.user_id, m.category_id, m.subcategory_id, m.title, m.media_kind, m.mime_type,
+           m.original_filename, m.storage_path, m.is_adult, m.created_at, m.views,
+           m.image_phash, m.image_dhash
+    FROM media_items m
+    WHERE %s
+    LIMIT 5000
+  ]], table.concat(clauses, " AND "))
+  local candidates = db.fetchall(sql, unpack(params))
+
+  local scored = {}
+  for _, row in ipairs(candidates) do
+    local pdist = current_phash and hex_hamming_distance(current_phash, row.image_phash) or nil
+    local ddist = current_dhash and hex_hamming_distance(current_dhash, row.image_dhash) or nil
+    if pdist and pdist > M.settings.visual_phash_max_distance then pdist = nil end
+    if ddist and ddist > M.settings.visual_dhash_max_distance then ddist = nil end
+    if pdist or ddist then
+      local best = pdist and ddist and math.min(pdist, ddist) or (pdist or ddist)
+      row.image_phash, row.image_dhash = nil, nil
+      scored[#scored + 1] = { distance = best, row = row }
+    end
+  end
+  table.sort(scored, function(a, b) return a.distance < b.distance end)
+
+  local results = {}
+  for i = 1, math.min(60, #scored) do
+    local row = scored[i].row
+    row.id = db.toint(row.id, row.id)
+    row.user_id = db.toint(row.user_id, row.user_id)
+    row.category_id = db.toint(row.category_id, row.category_id)
+    row.views = db.toint(row.views, 0)
+    row.is_adult = db.tobool(row.is_adult)
+    row.match_distance = scored[i].distance
+    with_urls(req, row, adult_allowed)
+    results[#results + 1] = row
+  end
+  attach_media_subcategories(results)
+  return results
+end
+
+-- POST /api/search/visual -- multipart upload, the main reverse-image-search
+-- entry point (a dedicated search page, not tied to any existing post).
+function M.visual_search(req)
+  local auth = auth_optional(req)
+  local viewer_id = auth and tostring(auth.id) or nil
+  local adult_allowed = viewer_adult_allowed(viewer_id)
+
+  local rl_status, rl_body = ratelimit.check("visual_search:" .. (viewer_id or client_ip(req)), 30, 3600)
+  if rl_status then return rl_status, rl_body end
+
+  local upload = (req.files or {}).file
+  if not upload or not upload.content or upload.content == "" then
+    return 400, { detail = "Upload an image to search with." }
+  end
+  if #upload.content > 15 * 1024 * 1024 then
+    return 413, { detail = "Search image must be 15MB or smaller." }
+  end
+  local sniffed_mime, media_kind = sniff_magic(upload.content)
+  if not sniffed_mime or media_kind ~= "image" then
+    return 400, { detail = "That file doesn't look like an image." }
+  end
+  local fingerprint = media_files.image_fingerprint(upload.content)
+  if not fingerprint or (not nn(fingerprint.image_phash) and not nn(fingerprint.image_dhash)) then
+    return 400, { detail = "Could not read that image." }
+  end
+
+  local results = run_visual_search(req, fingerprint, viewer_id, adult_allowed, nil)
+  return 200, { media = arr(results) }
+end
+
+-- GET /api/media/:media_id/visual-similar -- "find visually similar" from an
+-- existing post, reusing its already-stored hash (no re-upload/re-hash).
+function M.visual_search_from_media(req)
+  local media_id = tonumber(req.params.media_id)
+  if not media_id then return 404, { detail = "Media not found." } end
+  local auth = auth_optional(req)
+  local viewer_id = auth and tostring(auth.id) or nil
+  local adult_allowed = viewer_adult_allowed(viewer_id)
+
+  local seed = fetch_media_by_id(media_id, viewer_id or "0")
+  local vstatus, vbody = ensure_media_visible(seed, viewer_id)
+  if vstatus then return vstatus, vbody end
+  if seed.media_kind ~= "image" or (not nn(seed.image_phash) and not nn(seed.image_dhash)) then
+    return 400, { detail = "That post has no visual fingerprint to search with." }
+  end
+
+  local results = run_visual_search(req, { image_phash = seed.image_phash, image_dhash = seed.image_dhash },
+    viewer_id, adult_allowed, media_id)
+  return 200, { media = arr(results) }
+end
+
 -- Mirrors app/routers/media.py's _notify_discord_upload/_notify_discord_upload_async.
 -- Fire-and-forget (see discord_webhook.lua): a slow/broken webhook must
 -- never delay or fail the upload response.
@@ -3216,6 +3578,14 @@ local function finalize_upload(req, user, source, original_filename, form)
   -- scheduled post simply never triggers this notification retroactively.
   if visibility == "public" and not publish_at then
     notify_matching_saved_searches(user.id, enriched)
+    -- Followers get a "new upload" notification (in-app + push, via
+    -- create_notification's own push.notify hook) the same way saved-
+    -- search subscribers just did above -- same gating, since neither
+    -- should fire for something that isn't actually visible yet.
+    local followers = db.fetchall("SELECT follower_id FROM user_follows WHERE followed_id=%s", tostring(user.id))
+    for _, f in ipairs(followers) do
+      create_notification(db.toint(f.follower_id, f.follower_id), user.id, "new_upload", media_id, title)
+    end
   end
   return 200, { media = enriched, possible_duplicates = arr(possible_duplicates), possible_site_duplicates = arr(possible_site_duplicates) }
 end
@@ -3848,9 +4218,25 @@ local function perform_update_media(media_id, owner_id, payload)
     end
   end
 
-  local row = db.fetchone("SELECT user_id FROM media_items WHERE id=%s AND deleted_at IS NULL", tostring(media_id))
+  local row = db.fetchone(
+    "SELECT user_id, title, description, tags, category_id, visibility, is_adult FROM media_items WHERE id=%s AND deleted_at IS NULL",
+    tostring(media_id))
   if not row then return 404, "Media not found." end
   if tostring(row.user_id) ~= tostring(owner_id) then return 403, "Only the uploader can edit this post." end
+
+  -- Snapshot the fields a viewer actually cares about before they're
+  -- overwritten below, so M.media_edit_history has something to diff
+  -- against. Only fields that actually changed get recorded.
+  local new_tags_json = cjson.encode(arr(clean_tags))
+  local edit_changes = {}
+  if nn(row.title) ~= title then edit_changes.title = { from = row.title, to = title } end
+  if (nn(row.description) or "") ~= description then edit_changes.description = { from = row.description, to = description } end
+  if nn(row.tags) ~= new_tags_json then edit_changes.tags = { from = row.tags, to = new_tags_json } end
+  if tostring(db.toint(row.category_id, row.category_id)) ~= tostring(category_id) then
+    edit_changes.category_id = { from = row.category_id, to = category_id }
+  end
+  if tostring(row.visibility) ~= visibility then edit_changes.visibility = { from = row.visibility, to = visibility } end
+  if db.tobool(row.is_adult) ~= is_adult then edit_changes.is_adult = { from = db.tobool(row.is_adult), to = is_adult } end
 
   -- Built by concatenation rather than string.format: the template is itself
   -- full of %s placeholders for db.execute to fill, so formatting it here
@@ -3870,7 +4256,7 @@ local function perform_update_media(media_id, owner_id, payload)
   ]]
 
   local params = {
-    title, description, cjson.encode(arr(clean_tags)), tostring(category_id),
+    title, description, new_tags_json, tostring(category_id),
     visibility, comments_enabled, downloads_enabled,
     pinned, is_adult, is_adult, is_adult, is_adult, is_adult,
   }
@@ -3884,6 +4270,11 @@ local function perform_update_media(media_id, owner_id, payload)
   params[#params + 1] = owner_id
   db.execute(sql, unpack(params))
   write_media_subcategories(media_id, resolved_subcategory_ids)
+
+  if next(edit_changes) then
+    db.execute("INSERT INTO media_edit_history (media_id, editor_id, changes) VALUES (%s, %s, %s)",
+      tostring(media_id), owner_id, cjson.encode(edit_changes))
+  end
 
   return nil, fetch_media_by_id(media_id, tostring(owner_id))
 end
@@ -3899,6 +4290,41 @@ function M.update_media(req)
   if err_status then return err_status, { detail = result } end
   local adult_allowed = viewer_adult_allowed(tostring(user.id))
   return 200, { media = decode_media_row(result, adult_allowed, req) }
+end
+
+-- Owner-only: previous edits aren't shown to other viewers, same as any
+-- other uploader-facing control (M.set_media_controls, M.delete_media, ...).
+function M.media_edit_history(req)
+  local user, auth, status, body = current_user(req)
+  if not user then return status, body end
+  local media_id = tonumber(req.params.media_id)
+  if not media_id then return 404, { detail = "Media not found." } end
+
+  local row = db.fetchone("SELECT user_id FROM media_items WHERE id=%s", tostring(media_id))
+  if not row then return 404, { detail = "Media not found." } end
+  if tostring(row.user_id) ~= tostring(user.id) then return 403, { detail = "Only the uploader can view this post's edit history." } end
+
+  local rows = db.fetchall([[
+    SELECT h.id, h.editor_id, h.changes, h.created_at, u.username, u.display_name
+    FROM media_edit_history h JOIN users u ON u.id = h.editor_id
+    WHERE h.media_id=%s
+    ORDER BY h.created_at DESC
+    LIMIT 100
+  ]], tostring(media_id))
+
+  local entries = {}
+  for _, r in ipairs(rows) do
+    local ok, changes = pcall(cjson.decode, r.changes)
+    entries[#entries + 1] = {
+      id = db.toint(r.id, r.id),
+      editor_id = db.toint(r.editor_id, r.editor_id),
+      username = r.username,
+      display_name = r.display_name,
+      changes = ok and changes or {},
+      created_at = r.created_at,
+    }
+  end
+  return 200, { history = arr(entries) }
 end
 
 function M.set_media_controls(req)
@@ -4510,7 +4936,88 @@ end
 local NOTIFICATION_KINDS = {
   follow = true, friend_request = true, friend_accept = true, comment = true,
   message = true, mention = true, reply = true, reaction = true, saved_search = true,
+  comment_reaction = true, new_upload = true,
 }
+
+-- ONE bare global (not even one top-level local) -- this file is already
+-- sitting exactly at LuaJIT's 200-local-per-chunk ceiling (confirmed: even
+-- a single additional local here fails to compile), same situation as
+-- webpush/acquire_transcode_slot elsewhere in this file.
+push = {}
+
+-- Text templates for a push notification's title/body, one per
+-- NOTIFICATION_KINDS entry -- the server-side equivalent of
+-- NotificationBell.jsx's own notificationText(), since a push notification
+-- is rendered by the OS/browser notification UI, not by React, so there's
+-- no client-side code running to generate it from the raw kind/preview
+-- fields the way the in-app bell does.
+function push.notification_text(kind, actor_name, media_title, preview)
+  actor_name = actor_name or "Someone"
+  if kind == "follow" then
+    return "New follower", actor_name .. " followed you."
+  elseif kind == "friend_request" then
+    return "Friend request", actor_name .. " sent you a friend request."
+  elseif kind == "friend_accept" then
+    return "Friend request accepted", actor_name .. " accepted your friend request."
+  elseif kind == "comment" then
+    return "New comment", actor_name .. " commented" .. (media_title and (" on \"" .. media_title .. "\"") or " on your post") .. "."
+  elseif kind == "message" then
+    return "New message", actor_name .. " sent you a message."
+  elseif kind == "mention" then
+    return "You were mentioned", actor_name .. " mentioned you in a comment."
+  elseif kind == "reply" then
+    return "New reply", actor_name .. " replied to your comment."
+  elseif kind == "reaction" then
+    return "New reaction", actor_name .. " reacted to your post."
+  elseif kind == "comment_reaction" then
+    return "New reaction", actor_name .. " reacted to your comment."
+  elseif kind == "new_upload" then
+    return "New upload", actor_name .. " uploaded" .. (media_title and (" \"" .. media_title .. "\"") or " something new") .. "."
+  elseif kind == "saved_search" then
+    return "Saved search match", preview or "A new post matches one of your saved searches."
+  end
+  return "Nyxframe", preview or (actor_name .. " did something.")
+end
+
+-- Delivers `kind`'s web push to every device `recipient_id` has push
+-- enabled on. Checked AFTER create_notification's own gating (self/
+-- blocked/unknown-kind) so this never fires for a notification that
+-- wouldn't have been created in-app either. The common case (no push
+-- subscriptions at all) is one cheap indexed SELECT and nothing else --
+-- the actor-name/media-title lookups below only run for recipients who
+-- actually have at least one subscription to deliver to.
+function push.notify(recipient_id, actor_id, kind, media_id, preview)
+  local subs = db.fetchall("SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id=%s", tostring(recipient_id))
+  if not subs or #subs == 0 then return end
+
+  local actor_name = nil
+  if actor_id then
+    local actor = db.fetchone("SELECT username, display_name, public_profile FROM users WHERE id=%s", tostring(actor_id))
+    if actor then actor_name = (db.tobool(actor.public_profile) and actor.display_name) or actor.username end
+  end
+  local media_title = nil
+  if media_id then
+    local m = db.fetchone("SELECT title FROM media_items WHERE id=%s", tostring(media_id))
+    media_title = m and nn(m.title)
+  end
+  local title, body = push.notification_text(kind, actor_name, media_title, preview)
+  local url = media_id and ("/media/" .. tostring(media_id))
+    or (kind == "message" and "/messages")
+    or (kind == "friend_request" and "/friends")
+    or "/"
+
+  for _, sub in ipairs(subs) do
+    webpush.send_to_subscription_async(sub, { title = title, body = body, url = url }, function(ok, status)
+      -- 404/410: the push service is telling us this subscription is
+      -- permanently gone (unsubscribed, browser data cleared, endpoint
+      -- rotated) -- not a transient failure, so clean it up rather than
+      -- retrying it forever on every future notification.
+      if ok and (status == 404 or status == 410) then
+        db.execute("DELETE FROM push_subscriptions WHERE id=%s", tostring(sub.id))
+      end
+    end)
+  end
+end
 
 -- True if `recipient_id` has blocked OR muted `actor_id` (either kind, not
 -- bidirectional like is_blocked_either_way below -- muting someone is a
@@ -4547,6 +5054,57 @@ create_notification = function(recipient_id, actor_id, kind, media_id, preview)
     "INSERT INTO notifications (recipient_id, actor_id, kind, media_id, preview) VALUES (%s, %s, %s, %s, %s)",
     tostring(recipient_id), actor_id and tostring(actor_id) or nil, kind, media_id and tostring(media_id) or nil, preview
   )
+  push.notify(recipient_id, actor_id, kind, media_id, preview)
+end
+
+-- GET /api/push/vapid-public-key -- no auth required, this is the public
+-- half of a keypair by design (RFC 8292): the frontend hands it straight
+-- to PushManager.subscribe({applicationServerKey}).
+function M.push_vapid_public_key(req)
+  local key, err = webpush.vapid_public_key_b64url()
+  if not key then return 500, { detail = "Push is not available: " .. tostring(err) } end
+  return 200, { key = key }
+end
+
+-- POST /api/push/subscribe -- body: {endpoint, keys: {p256dh, auth}},
+-- exactly the shape JSON.stringify(pushSubscription) on the frontend
+-- already produces (toJSON() on a real PushSubscription nests p256dh/auth
+-- under "keys"). Upserts on endpoint: re-subscribing the same browser
+-- (e.g. after this account's push toggle was off then on again) updates
+-- the existing row instead of erroring on the UNIQUE constraint.
+function M.push_subscribe(req)
+  local user, auth, status, body = current_user(req)
+  if not user then return status, body end
+  local payload = json_body(req)
+  local endpoint = trim(nn(payload.endpoint) or "")
+  local keys = payload.keys or {}
+  local p256dh = trim(nn(keys.p256dh) or "")
+  local push_auth = trim(nn(keys.auth) or "")
+  if endpoint == "" or p256dh == "" or push_auth == "" then
+    return 400, { detail = "A complete push subscription (endpoint, keys.p256dh, keys.auth) is required." }
+  end
+  if not (endpoint:match("^https://") or endpoint:match("^http://")) then
+    return 400, { detail = "Invalid push endpoint." }
+  end
+  local user_agent = trim(nn(req.headers["user-agent"]) or ""):sub(1, 300)
+  db.execute([[
+    INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth, user_agent) VALUES (%s, %s, %s, %s, %s)
+    ON CONFLICT (endpoint) DO UPDATE SET user_id=EXCLUDED.user_id, p256dh=EXCLUDED.p256dh, auth=EXCLUDED.auth, user_agent=EXCLUDED.user_agent
+  ]], user.id, endpoint, p256dh, push_auth, user_agent ~= "" and user_agent or nil)
+  return 200, { ok = true }
+end
+
+-- POST /api/push/unsubscribe -- body: {endpoint}. Scoped to the current
+-- user's own subscriptions (a stolen/guessed endpoint string shouldn't let
+-- anyone else's push subscription be deleted).
+function M.push_unsubscribe(req)
+  local user, auth, status, body = current_user(req)
+  if not user then return status, body end
+  local payload = json_body(req)
+  local endpoint = trim(nn(payload.endpoint) or "")
+  if endpoint == "" then return 400, { detail = "endpoint is required." } end
+  db.execute("DELETE FROM push_subscriptions WHERE user_id=%s AND endpoint=%s", user.id, endpoint)
+  return 200, { ok = true }
 end
 
 -- Mirrors app/db/social.py's is_blocked_either_way().

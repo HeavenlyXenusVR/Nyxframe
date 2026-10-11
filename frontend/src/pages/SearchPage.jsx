@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
-import { Image as ImageIcon, Search as SearchIcon, Tag as TagIcon, Users as UsersIcon } from "lucide-react";
+import { Camera, Image as ImageIcon, Play, Search as SearchIcon, Tag as TagIcon, Users as UsersIcon } from "lucide-react";
 import { cachedApiFetch, toQuery } from "../api.js";
 import { MediaGrid } from "../components/media.jsx";
 import { Avatar, EmptyState, Page, Pager, PresencePill, SkeletonGrid } from "../components/ui.jsx";
@@ -90,6 +90,7 @@ export function SearchPage({ ctx }) {
           autoFocus
         />
         <button type="submit">Search</button>
+        <Link to="/visual-search" className="icon-button" title="Search by image"><Camera size={18} /></Link>
       </form>
 
       {query ? (
@@ -116,14 +117,23 @@ export function SearchPage({ ctx }) {
               {loading && !media.length ? (
                 <SkeletonGrid count={8} />
               ) : (
-                <MediaGrid
-                  ctx={ctx}
-                  items={media}
-                  loading={loading}
-                  emptyTitle={`No posts match “${query}”`}
-                  onItemUpdated={(updated) => setMedia((rows) => rows.map((row) => (row.id === updated.id ? updated : row)))}
-                  onOpen={ctx.openLightbox}
-                />
+                <>
+                  {media.length > 1 ? (
+                    <div className="search-results-bar">
+                      <button type="button" onClick={() => ctx.openLightbox(media, 0, { autoplay: true })}>
+                        <Play size={15} />Play all
+                      </button>
+                    </div>
+                  ) : null}
+                  <MediaGrid
+                    ctx={ctx}
+                    items={media}
+                    loading={loading}
+                    emptyTitle={`No posts match “${query}”`}
+                    onItemUpdated={(updated) => setMedia((rows) => rows.map((row) => (row.id === updated.id ? updated : row)))}
+                    onOpen={ctx.openLightbox}
+                  />
+                </>
               )}
               <Pager page={page} hasNext={hasNext} loading={loading} onPage={setPage} />
             </>

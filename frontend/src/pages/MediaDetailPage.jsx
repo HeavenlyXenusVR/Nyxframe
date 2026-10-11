@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { Bookmark, ChevronLeft, ChevronRight, Copy, Download, Heart, Image as ImageIcon, Link as LinkIcon, Lock, MessageCircle, Reply, Tag, Trash2, X as XIcon } from "lucide-react";
+import { Bookmark, ChevronLeft, ChevronRight, Copy, Download, Eye, Heart, Image as ImageIcon, Link as LinkIcon, Lock, MessageCircle, Reply, Tag, Trash2, X as XIcon } from "lucide-react";
 import { apiFetch } from "../api.js";
 import { useLiveRefresh } from "../hooks/useLiveRefresh.js";
 import { useMediaActions } from "../hooks/useMediaActions.js";
-import { MediaActionPanel, MediaControls, MediaEditor } from "../components/media.jsx";
+import { MediaActionPanel, MediaControls, MediaEditHistory, MediaEditor } from "../components/media.jsx";
 import { VideoPlayer } from "../components/VideoPlayer.jsx";
 import { Avatar, ChipRow, EmptyState, glassPointerMove, Notice, NotFound, Page, ResilientImage, SkeletonGrid, StatsRow, UserLine } from "../components/ui.jsx";
 import { imageQualityUrl, isGifMedia, thumbUrl, videoQualityUrl } from "../utils/media.js";
@@ -26,6 +26,7 @@ export function MediaDetailPage({ ctx }) {
   const siblingIndex = useMemo(() => siblingIds.findIndex((id) => String(id) === String(mediaId)), [siblingIds, mediaId]);
   const [media, setMedia] = useState(null);
   const [comments, setComments] = useState([]);
+  const [openCommentReactionPicker, setOpenCommentReactionPicker] = useState(null);
   const [commentBody, setCommentBody] = useState("");
   const [replyTo, setReplyTo] = useState(null);
   const [reactions, setReactions] = useState({ counts: {}, my_reaction: null });
@@ -91,6 +92,27 @@ export function MediaDetailPage({ ctx }) {
 
   useLiveRefresh(() => loadDetail({ background: true }), { enabled: Boolean(mediaId) && media?.media_kind !== "video", interval: 45_000 });
 
+  // "N people viewing this now" -- a heartbeat, not a one-shot fetch:
+  // every ~15s tells the backend "still here," and media_active_viewers
+  // ages a viewer out automatically if the heartbeats stop (tab closed,
+  // navigated away) rather than needing an explicit leave signal. Pausing
+  // while backgrounded (useLiveRefresh's own behavior) is correct here
+  // too -- someone who switched tabs isn't actively viewing either.
+  const [viewingNow, setViewingNow] = useState(null);
+  const sendViewingHeartbeat = useCallback(async () => {
+    if (!mediaId) return;
+    try {
+      const data = await apiFetch(`/api/media/${mediaId}/viewing`, { method: "POST" });
+      setViewingNow(typeof data.viewing_now === "number" ? data.viewing_now : null);
+    } catch {
+      // A missed heartbeat (403 on an adult post before verification, a
+      // transient network blip) just means the count doesn't show this
+      // tick -- not worth surfacing as a page error for a decorative stat.
+    }
+  }, [mediaId]);
+  useEffect(() => { setViewingNow(null); }, [mediaId]);
+  useLiveRefresh(sendViewingHeartbeat, { enabled: Boolean(mediaId), interval: 15_000, immediate: true });
+
   const goToSibling = useCallback((nextIndex) => {
     if (nextIndex < 0 || nextIndex >= siblingIds.length) return;
     navigate(`/media/${siblingIds[nextIndex]}`, { state: { siblingIds, atIndex: nextIndex }, replace: true });
@@ -146,6 +168,77 @@ export function MediaDetailPage({ ctx }) {
     } catch (reactError) {
       ctx.showToast(reactError.message, "error");
     }
+  }
+
+  async function reactToComment(commentId, emoji) {
+    try {
+      const data = await apiFetch(`/api/comments/${commentId}/react`, {
+        method: "POST",
+        body: JSON.stringify({ emoji }),
+      });
+      const nextReactions = data.reactions || { counts: {}, my_reaction: null };
+      setComments((rows) => rows.map((row) => (Number(row.id) === Number(commentId) ? { ...row, reactions: nextReactions } : row)));
+    } catch (reactError) {
+      ctx.showToast(reactError.message, "error");
+    }
+  }
+
+  // Compact version of the post-level reaction tray: existing reactions
+  // with a nonzero count always show as pills (click to toggle your own),
+  // and a small "+" reveals the full emoji row to react for the first
+  // time -- a comment row has far less width than the post header, so
+  // always showing all 6 emojis per comment (like the post tray does)
+  // would dominate the thread instead of the comments themselves.
+  function renderCommentReactionRow(comment) {
+    const counts = comment.reactions?.counts || {};
+    const myReaction = comment.reactions?.my_reaction || null;
+    const present = REACTION_EMOJIS.filter((emoji) => counts[emoji] || emoji === myReaction);
+    const pickerOpen = openCommentReactionPicker === comment.id;
+    if (!ctx.user) {
+      return present.length ? (
+        <div className="comment-reactions">
+          {present.map((emoji) => (
+            <span key={emoji} className="reaction-pill reaction-pill-static">{emoji} {counts[emoji] || ""}</span>
+          ))}
+        </div>
+      ) : null;
+    }
+    return (
+      <div className="comment-reactions">
+        {present.map((emoji) => (
+          <button
+            key={emoji}
+            type="button"
+            className={`reaction-pill reaction-pill-sm ${myReaction === emoji ? "active" : ""}`}
+            onClick={() => { reactToComment(comment.id, emoji); setOpenCommentReactionPicker(null); }}
+          >
+            {emoji} {counts[emoji] || ""}
+          </button>
+        ))}
+        <button
+          type="button"
+          className="icon-button reaction-add-button"
+          title="Add reaction"
+          onClick={() => setOpenCommentReactionPicker(pickerOpen ? null : comment.id)}
+        >
+          +
+        </button>
+        {pickerOpen ? (
+          <div className="comment-reaction-picker">
+            {REACTION_EMOJIS.map((emoji) => (
+              <button
+                key={emoji}
+                type="button"
+                className="reaction-pill reaction-pill-sm"
+                onClick={() => { reactToComment(comment.id, emoji); setOpenCommentReactionPicker(null); }}
+              >
+                {emoji}
+              </button>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    );
   }
 
   async function deleteComment(commentId) {
@@ -299,6 +392,7 @@ export function MediaDetailPage({ ctx }) {
                     <div>
                       <strong>{comment.display_name || comment.username || "User"}</strong>
                       <p>{comment.body}</p>
+                      {renderCommentReactionRow(comment)}
                       {ctx.user ? <button type="button" className="icon-button" onClick={() => setReplyTo(comment)} title="Reply"><Reply size={14} /></button> : null}
                     </div>
                     {canDelete ? <button className="icon-button" type="button" onClick={() => deleteComment(comment.id)} title="Delete"><Trash2 size={16} /></button> : null}
@@ -313,6 +407,7 @@ export function MediaDetailPage({ ctx }) {
                             <div>
                               <strong>{reply.display_name || reply.username || "User"}</strong>
                               <p>{reply.body}</p>
+                              {renderCommentReactionRow(reply)}
                             </div>
                             {canDeleteReply ? <button className="icon-button" type="button" onClick={() => deleteComment(reply.id)} title="Delete"><Trash2 size={16} /></button> : null}
                           </article>
@@ -341,6 +436,9 @@ export function MediaDetailPage({ ctx }) {
             </p>
           ) : null}
           <StatsRow item={media} />
+          {viewingNow >= 2 ? (
+            <p className="viewing-now-badge"><Eye size={14} /> {viewingNow} people viewing this now</p>
+          ) : null}
           <ChipRow values={metadataChips} />
           {ctx.user ? (
             <div className="side-box personal-tags-box">
@@ -391,6 +489,12 @@ export function MediaDetailPage({ ctx }) {
               <MediaControls ctx={ctx} media={media} onChanged={setMedia} />
             </details>
           ) : null}
+          {isOwner ? (
+            <details className="side-disclosure">
+              <summary>Edit history</summary>
+              <MediaEditHistory ctx={ctx} media={media} />
+            </details>
+          ) : null}
           {ctx.user ? (
             <details className="side-disclosure">
               <summary>Report this post</summary>
@@ -407,7 +511,12 @@ export function MediaDetailPage({ ctx }) {
         <section className="similar-media-panel">
           <div className="section-head">
             <h2>More like this</h2>
-            <Link to={`/media/${media.id}/similar`} className="similar-media-see-all">See all</Link>
+            <span className="section-head-links">
+              {media.media_kind === "image" ? (
+                <Link to={`/visual-search?mediaId=${media.id}`} className="similar-media-see-all">Find visually similar</Link>
+              ) : null}
+              <Link to={`/media/${media.id}/similar`} className="similar-media-see-all">See all</Link>
+            </span>
           </div>
           <div className="similar-media-rail">
             {similar.map((item) => (

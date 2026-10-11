@@ -1242,6 +1242,52 @@ textarea:focus {
   font-size: 1rem;
 }
 
+.edit-history-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.edit-history-entry {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+  font-size: 0.82rem;
+}
+
+.edit-history-entry:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.edit-history-entry header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.edit-history-entry time {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.edit-history-entry ul {
+  margin: 0;
+  padding-left: 16px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.edit-history-field {
+  color: var(--text);
+  font-weight: 600;
+}
+
 .tag-cloud div,
 .chip-row {
   display: flex;
@@ -1295,6 +1341,58 @@ textarea:focus {
 .media-grid-wide .thumb-frame,
 .gallery-grid-wide .thumb-frame {
   aspect-ratio: 16 / 10;
+}
+
+/* Masonry layout: CSS multi-column instead of a uniform grid, so each
+   card keeps its source aspect ratio and packs into the shortest column
+   (the Pinterest "staggered" look) instead of every row's height being
+   dictated by its tallest member. */
+.media-grid-layout-masonry,
+.gallery-grid-layout-masonry .media-grid {
+  display: block;
+  column-count: 2;
+  column-gap: var(--media-grid-gap, 14px);
+}
+
+@media (min-width: 640px) {
+  .media-grid-layout-masonry,
+  .gallery-grid-layout-masonry .media-grid {
+    column-count: 3;
+  }
+}
+
+@media (min-width: 1024px) {
+  .media-grid-layout-masonry,
+  .gallery-grid-layout-masonry .media-grid {
+    column-count: 4;
+  }
+}
+
+@media (min-width: 1400px) {
+  .media-grid-layout-masonry,
+  .gallery-grid-layout-masonry .media-grid {
+    column-count: 5;
+  }
+}
+
+.media-grid-layout-masonry .media-card,
+.gallery-grid-layout-masonry .media-grid .media-card {
+  break-inside: avoid;
+  margin-bottom: var(--media-grid-gap, 14px);
+}
+
+.media-grid-layout-masonry .thumb-frame,
+.gallery-grid-layout-masonry .media-grid .thumb-frame {
+  aspect-ratio: auto;
+}
+
+.media-grid-layout-masonry .thumb-frame img,
+.media-grid-layout-masonry .thumb-frame video,
+.gallery-grid-layout-masonry .media-grid .thumb-frame img,
+.gallery-grid-layout-masonry .media-grid .thumb-frame video {
+  width: 100%;
+  height: auto;
+  object-fit: initial;
 }
 
 .media-card,
@@ -2656,6 +2754,12 @@ textarea:focus {
   font-size: 1.15rem;
 }
 
+.section-head-links {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
 .comment-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -3655,6 +3759,46 @@ textarea:focus {
   font-size: 0.9rem;
   color: var(--muted);
   font-weight: 600;
+}
+
+.on-this-day-row {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+
+.on-this-day-card {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 140px;
+  border-radius: var(--radius);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  text-decoration: none;
+  color: inherit;
+}
+
+.on-this-day-card img {
+  width: 140px;
+  height: 100px;
+  object-fit: cover;
+}
+
+.on-this-day-years {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--accent, #37c9a7);
+  padding: 6px 8px 0;
+}
+
+.on-this-day-title {
+  font-size: 0.8rem;
+  padding: 2px 8px 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .studio-chart {
@@ -4926,6 +5070,33 @@ textarea:focus {
   color: var(--text);
 }
 
+.lb-slideshow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding-top: 6px;
+}
+
+.lb-slideshow-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 5px 12px;
+  font-size: 0.82rem;
+}
+
+.lb-slideshow-speed {
+  min-height: 30px;
+  padding: 4px 8px;
+  font-size: 0.8rem;
+  border-radius: 8px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
 @media (max-width: 760px) {
   .lb-panel {
     grid-template-columns: minmax(0, 1fr);
@@ -5721,6 +5892,15 @@ textarea:focus {
   flex-wrap: wrap;
 }
 
+.viewing-now-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--muted, #9aa3af);
+  margin: 2px 0 0;
+}
+
 /* Emoji reactions on media detail */
 .reaction-tray {
   display: flex;
@@ -5739,6 +5919,48 @@ textarea:focus {
 .reaction-pill.active {
   border-color: var(--accent, #37c9a7);
   background: color-mix(in srgb, var(--accent, #37c9a7) 18%, transparent);
+}
+
+/* Compact emoji reactions on individual comments */
+.comment-reactions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  position: relative;
+}
+
+.reaction-pill-sm {
+  padding: 2px 7px;
+  font-size: 0.75rem;
+}
+
+.reaction-pill-static {
+  padding: 2px 7px;
+  font-size: 0.75rem;
+  cursor: default;
+}
+
+.reaction-add-button {
+  font-size: 0.8rem;
+  line-height: 1;
+  padding: 2px 6px;
+}
+
+.comment-reaction-picker {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 5;
+  display: flex;
+  gap: 4px;
+  padding: 6px;
+  margin-top: 2px;
+  border-radius: 10px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel-2);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
 }
 
 /* Threaded comment replies */
@@ -6415,10 +6637,62 @@ textarea:focus {
   flex: none;
 }
 
+.visual-search-drop {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 220px;
+  margin-bottom: 18px;
+  padding: 20px;
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+  background: var(--panel-2);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.visual-search-drop-hint {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.visual-search-preview {
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: 10px;
+  object-fit: contain;
+}
+
+.visual-search-clear {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+}
+
 .search-tabs {
   display: flex;
   gap: 8px;
   margin-bottom: 14px;
+}
+
+.search-results-bar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 10px;
+}
+
+.search-results-bar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  padding: 6px 12px;
 }
 
 .search-tab {
@@ -7543,7 +7817,8 @@ select option {
 }
 
 .upload-dropzone input,
-.upload-file-actions input {
+.upload-file-actions input,
+.upload-batch-head input {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -7675,6 +7950,73 @@ select option {
 .upload-file-actions .is-disabled {
   opacity: 0.55;
   pointer-events: none;
+}
+
+.upload-batch-queue {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.upload-batch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-weight: 600;
+}
+
+.upload-batch-head .button-link {
+  position: relative;
+  font-weight: 500;
+}
+
+.upload-batch-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.upload-batch-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--panel-2);
+  font-size: 0.85rem;
+}
+
+.upload-batch-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-batch-size {
+  color: var(--muted, #9aa3af);
+  font-size: 0.8rem;
+}
+
+.upload-batch-status {
+  min-width: 64px;
+  text-align: right;
+  font-size: 0.8rem;
+  color: var(--muted, #9aa3af);
+}
+
+.upload-batch-item.status-done .upload-batch-status {
+  color: var(--accent, #37c9a7);
+}
+
+.upload-batch-item.status-error .upload-batch-status {
+  color: #e05d5d;
 }
 
 .upload-ai {

@@ -29,8 +29,9 @@ export function MediaGrid({ ctx, items, loading = false, emptyTitle = "No media"
   if (!items?.length) return <EmptyState title={emptyTitle} />;
   const eagerCount = isPerfLiteRuntime() ? 2 : 4;
   const densityClass = `media-grid-${ctx.settings.grid_density || "comfortable"}`;
+  const layoutClass = ctx.settings.grid_layout === "masonry" ? "media-grid-layout-masonry" : "";
   return (
-    <div className={["media-grid", densityClass, extraClass].filter(Boolean).join(" ")}>
+    <div className={["media-grid", densityClass, layoutClass, extraClass].filter(Boolean).join(" ")}>
       {items.map((item, index) => (
         <MediaCard
           ctx={ctx}
@@ -490,6 +491,78 @@ export function MediaControls({ ctx, media, onChanged, onDeleted }) {
         <button type="button" onClick={save}><Save size={16} />Save</button>
         {media.deleted_at ? <button type="button" onClick={restore}><RefreshCw size={16} />Restore</button> : <button type="button" className="danger" onClick={remove}><Trash2 size={16} />Delete</button>}
       </div>
+    </section>
+  );
+}
+
+const EDIT_HISTORY_FIELD_LABELS = {
+  title: "Title",
+  description: "Description",
+  tags: "Tags",
+  category_id: "Category",
+  visibility: "Visibility",
+  is_adult: "18+ flag",
+};
+
+function editHistoryValueText(ctx, field, value) {
+  if (value === null || value === undefined || value === "") return "(empty)";
+  if (field === "category_id") {
+    const match = ctx.lookups.categories.find((c) => String(c.id) === String(value));
+    return match ? match.name : `#${value}`;
+  }
+  if (field === "tags") {
+    try {
+      const tags = JSON.parse(value);
+      return Array.isArray(tags) && tags.length ? tags.join(", ") : "(none)";
+    } catch {
+      return String(value);
+    }
+  }
+  if (field === "is_adult") return value ? "Yes" : "No";
+  return String(value);
+}
+
+// Owner-only: fetched eagerly like MediaEditor/MediaControls above, since
+// this sits behind its own collapsed <details> disclosure already -- no
+// extra lazy-load gate needed on top of that.
+export function MediaEditHistory({ ctx, media }) {
+  const [entries, setEntries] = useState(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setEntries(null);
+    setError("");
+    apiFetch(`/api/media/${media.id}/history`).then((data) => {
+      if (!cancelled) setEntries(data.history || []);
+    }).catch((err) => {
+      if (!cancelled) setError(err.message);
+    });
+    return () => { cancelled = true; };
+  }, [media.id]);
+
+  if (error) return <section className="side-box"><p className="field-hint">{error}</p></section>;
+  if (!entries) return <section className="side-box"><p className="field-hint">Loading…</p></section>;
+  if (!entries.length) return <section className="side-box"><p className="field-hint">No edits yet.</p></section>;
+
+  return (
+    <section className="side-box edit-history-list">
+      {entries.map((entry) => (
+        <article key={entry.id} className="edit-history-entry">
+          <header>
+            <strong>{entry.display_name || entry.username}</strong>
+            <time>{formatDate(entry.created_at)}</time>
+          </header>
+          <ul>
+            {Object.entries(entry.changes).map(([field, change]) => (
+              <li key={field}>
+                <span className="edit-history-field">{EDIT_HISTORY_FIELD_LABELS[field] || field}:</span>{" "}
+                {editHistoryValueText(ctx, field, change.from)} → {editHistoryValueText(ctx, field, change.to)}
+              </li>
+            ))}
+          </ul>
+        </article>
+      ))}
     </section>
   );
 }

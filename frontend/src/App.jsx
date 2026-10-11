@@ -53,6 +53,7 @@ const ProfilePage = lazyPage(() => import("./pages/ProfilePage.jsx"), "ProfilePa
 const SearchPage = lazyPage(() => import("./pages/SearchPage.jsx"), "SearchPage");
 const SettingsPage = lazyPage(() => import("./pages/SettingsPage.jsx"), "SettingsPage");
 const SimilarMediaPage = lazyPage(() => import("./pages/SimilarMediaPage.jsx"), "SimilarMediaPage");
+const VisualSearchPage = lazyPage(() => import("./pages/VisualSearchPage.jsx"), "VisualSearchPage");
 const StudioPage = lazyPage(() => import("./pages/StudioPage.jsx"), "StudioPage");
 const TrendingPage = lazyPage(() => import("./pages/TrendingPage.jsx"), "TrendingPage");
 const UploadPage = lazyPage(() => import("./pages/UploadPage.jsx"), "UploadPage");
@@ -146,7 +147,7 @@ function App() {
     setToast({ message, kind, id: Date.now() });
   }, []);
 
-  const openLightbox = useCallback((items, index) => setLightbox({ items, index: index ?? 0 }), []);
+  const openLightbox = useCallback((items, index, options) => setLightbox({ items, index: index ?? 0, autoplay: !!options?.autoplay }), []);
   const closeLightbox = useCallback(() => setLightbox(null), []);
   const cycleTheme = useCallback(() => {
     setQuickTheme((current) => {
@@ -505,6 +506,7 @@ function App() {
         <Route path="/liked" element={<FeedPage ctx={ctx} mode="liked" />} />
         <Route path="/media/:mediaId" element={<MediaDetailPage ctx={ctx} />} />
         <Route path="/media/:mediaId/similar" element={<SimilarMediaPage ctx={ctx} />} />
+        <Route path="/visual-search" element={<VisualSearchPage ctx={ctx} />} />
         <Route path="/collections" element={<CollectionsPage ctx={ctx} />} />
         <Route path="/users" element={<UsersPage ctx={ctx} />} />
         <Route path="/users/:username" element={<ProfilePage ctx={ctx} />} />

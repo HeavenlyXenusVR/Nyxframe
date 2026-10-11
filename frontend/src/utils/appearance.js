@@ -3,6 +3,7 @@ import { safeColor } from "./format.js";
 const CHOICES = {
   theme_mode: new Set(["system", "dark", "light"]),
   grid_density: new Set(["compact", "comfortable", "wide"]),
+  grid_layout: new Set(["grid", "masonry"]),
   card_hover_effect: new Set(["lift", "zoom", "reveal", "glow", "none"]),
   media_border_style: new Set(["none", "soft", "crisp", "glow", "neon"]),
   card_info_display: new Set(["below", "overlay", "minimal", "hidden"]),
@@ -149,6 +150,7 @@ export function galleryClassName(settings) {
   return [
     `gallery-theme-${choice(settings, "theme_mode", "system")}`,
     `gallery-grid-${choice(settings, "grid_density", "comfortable")}`,
+    `gallery-grid-layout-${choice(settings, "grid_layout", "grid")}`,
     `gallery-hover-${choice(settings, "card_hover_effect", "lift")}`,
     `gallery-border-${choice(settings, "media_border_style", "none")}`,
     `gallery-info-${choice(settings, "card_info_display", "below")}`,

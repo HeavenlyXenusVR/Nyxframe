@@ -14,7 +14,7 @@ local M = {}
 
 M.DEFAULT_USER_SETTINGS = {
   theme_mode = "system", accent_color = "#37c9a7", accent_secondary = "", gallery_bg_color = "",
-  grid_density = "comfortable", default_sort = "new", items_per_page = 24,
+  grid_density = "comfortable", grid_layout = "grid", default_sort = "new", items_per_page = 24,
   autoplay_previews = false, muted_previews = true, reduce_motion = false,
   open_original_in_new_tab = false, blur_video_previews = false,
   profile_show_uploads = true, profile_show_collections = true, profile_show_friends = true,
@@ -39,6 +39,13 @@ M.DEFAULT_USER_SETTINGS = {
 local ALLOWED_CHOICES = {
   theme_mode = { system = true, dark = true, light = true },
   grid_density = { compact = true, comfortable = true, wide = true },
+  -- "masonry": variable card heights packed into CSS multi-column flow
+  -- (see .media-grid-layout-masonry) instead of the uniform fixed-
+  -- aspect-ratio grid every card_aspect_ratio choice otherwise still
+  -- applies -- card_aspect_ratio itself has no "natural/unconstrained"
+  -- option (its "free" choice just means "use the density default," see
+  -- appearance.js's CARD_ASPECT_MAP), so this is a genuinely separate axis.
+  grid_layout = { grid = true, masonry = true },
   default_sort = { ["new"] = true, popular = true, downloads = true, views = true, old = true },
   profile_layout = { spotlight = true, magazine = true, stack = true, split = true, mosaic = true, timeline = true },
   profile_banner_style = { gradient = true, mesh = true, frame = true, aurora = true, spotlight = true, poster = true },

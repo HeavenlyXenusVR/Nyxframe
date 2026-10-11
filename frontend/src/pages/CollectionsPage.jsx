@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Download, Film, Image as ImageIcon, PlusCircle, RefreshCw, Save, Search, Sparkles } from "lucide-react";
+import { Download, Film, Image as ImageIcon, Play, PlusCircle, RefreshCw, Save, Search, Sparkles } from "lucide-react";
 import { apiFetch, apiFetchBlob, cachedApiFetch, clearApiCache, downloadBlob, toQuery } from "../api.js";
 import { MediaGrid } from "../components/media.jsx";
 import { CollectionCover, EmptyState, Notice, Page, ResilientImage, Segmented, SkeletonList } from "../components/ui.jsx";
@@ -290,6 +290,9 @@ export function CollectionsPage({ ctx }) {
                 <span>{selected.is_public ? "Public" : "Private"}</span>
                 <button type="button" onClick={downloadCollection} disabled={downloadingAll || !media.length}>
                   <Download size={16} />{downloadingAll ? "Zipping…" : "Download all"}
+                </button>
+                <button type="button" onClick={() => ctx.openLightbox(media, 0, { autoplay: true })} disabled={!media.length}>
+                  <Play size={16} />Play all
                 </button>
               </div>
               {canEditSelected && !selected.is_smart ? (

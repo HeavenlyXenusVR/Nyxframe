@@ -92,3 +92,70 @@ self.addEventListener("fetch", (event) => {
     );
   }
 });
+
+// Web Push: the payload is the plain JSON object lua/src/webpush.lua's
+// encrypt_payload() encrypts -- {title, body, url} -- the browser has
+// already decrypted it (per RFC 8291) by the time this fires, so this is
+// just "show it" plus a click handler to land on the right page.
+self.addEventListener("push", (event) => {
+  let data = { title: "Nyxframe", body: "You have a new notification.", url: "/" };
+  try {
+    if (event.data) data = { ...data, ...event.data.json() };
+  } catch {
+    // Not valid JSON (shouldn't happen -- we always send JSON) -- fall
+    // back to the generic text above rather than throwing out of the
+    // event handler, which would silently drop the notification entirely.
+  }
+  event.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: "/static/react/pwa-192.png",
+      badge: "/static/react/pwa-192.png",
+      data: { url: data.url || "/" },
+    }),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const targetUrl = event.notification.data?.url || "/";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        // Reuse an already-open tab (just navigate it) rather than always
+        // opening a new one -- the common case for someone who already has
+        // the site open in a background tab.
+        if ("focus" in client) {
+          client.postMessage({ type: "navigate", url: targetUrl });
+          return client.focus();
+        }
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
+    }),
+  );
+});
+
+// Push subscriptions aren't forever -- the browser can drop and recreate
+// one on its own (key rotation, storage pressure). Re-subscribing with the
+// SAME applicationServerKey and re-POSTing is enough; the backend's
+// ON CONFLICT (endpoint) upsert (see routes.lua's M.push_subscribe) treats
+// a changed endpoint as a new row rather than erroring.
+self.addEventListener("pushsubscriptionchange", (event) => {
+  event.waitUntil(
+    (async () => {
+      try {
+        const newSubscription = await self.registration.pushManager.subscribe(event.oldSubscription?.options || {});
+        await fetch("/api/push/subscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(newSubscription.toJSON()),
+          credentials: "include",
+        });
+      } catch {
+        // Best-effort: if this fails, the next time the app is open and
+        // its own subscribe-on-load check runs, it'll notice push is no
+        // longer subscribed and re-subscribe through the normal UI path.
+      }
+    })(),
+  );
+});

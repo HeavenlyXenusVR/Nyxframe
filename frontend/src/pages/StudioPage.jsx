@@ -5,7 +5,7 @@ import { apiFetch, apiFetchBlob, clearApiCache, downloadBlob } from "../api.js";
 import { useLiveRefresh } from "../hooks/useLiveRefresh.js";
 import { StudioItem } from "../components/media.jsx";
 import { EmptyState, Metric, Page, RequireLogin, SkeletonList } from "../components/ui.jsx";
-import { replaceMedia } from "../utils/media.js";
+import { replaceMedia, thumbUrl } from "../utils/media.js";
 import { reconcileList } from "../utils/reconcile.js";
 
 // Minimal inline-SVG bar chart -- deliberately no charting library (none is
@@ -78,6 +78,7 @@ export function StudioPage({ ctx }) {
   const [bulkVisibility, setBulkVisibility] = useState("public");
   const [bulkTag, setBulkTag] = useState("");
   const [stats, setStats] = useState(null);
+  const [onThisDay, setOnThisDay] = useState([]);
 
   const showToast = ctx.showToast;
   const userId = ctx.user?.id;
@@ -200,10 +201,21 @@ export function StudioPage({ ctx }) {
     }
   }, [userId]);
 
+  const loadOnThisDay = useCallback(async () => {
+    if (!userId) return;
+    try {
+      const data = await apiFetch("/api/me/on-this-day");
+      setOnThisDay(data.media || []);
+    } catch {
+      // Same "nice-to-have, never block the page" rule as loadStats above.
+    }
+  }, [userId]);
+
   useEffect(() => {
     loadStudio();
     loadStats();
-  }, [loadStudio, loadStats]);
+    loadOnThisDay();
+  }, [loadStudio, loadStats, loadOnThisDay]);
 
   useLiveRefresh(() => loadStudio({ background: true }), { enabled: Boolean(ctx.user), interval: 25_000 });
 
@@ -222,6 +234,20 @@ export function StudioPage({ ctx }) {
         <Metric label="Likes" value={totals.likes} />
         <Metric label="Downloads" value={totals.downloads} />
       </div>
+      {onThisDay.length ? (
+        <div className="studio-analytics">
+          <h3>On this day</h3>
+          <div className="on-this-day-row">
+            {onThisDay.map((item) => (
+              <Link key={item.id} to={`/media/${item.id}`} className="on-this-day-card">
+                <img src={thumbUrl(item, 240)} alt={item.title || ""} loading="lazy" />
+                <span className="on-this-day-years">{item.years_ago} {item.years_ago === 1 ? "year" : "years"} ago</span>
+                <span className="on-this-day-title">{item.title}</span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      ) : null}
       {stats && stats.daily_new_viewers?.length ? (
         <div className="studio-analytics">
           <h3>New viewers, last 30 days</h3>

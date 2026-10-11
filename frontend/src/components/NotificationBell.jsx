@@ -15,6 +15,7 @@ const KIND_ICON = {
   mention: AtSign,
   reply: Reply,
   reaction: Smile,
+  comment_reaction: Smile,
   saved_search: Search,
 };
 
@@ -37,6 +38,8 @@ function notificationText(item) {
       return `${name} replied to your comment.`;
     case "reaction":
       return `${name} reacted to your post.`;
+    case "comment_reaction":
+      return `${name} reacted to your comment.`;
     case "saved_search":
       return item.preview || "A new post matches one of your saved searches.";
     default:
@@ -55,6 +58,7 @@ function notificationLink(item) {
     case "mention":
     case "reply":
     case "reaction":
+    case "comment_reaction":
     case "saved_search":
       return item.media_id ? `/media/${item.media_id}` : null;
     case "message":

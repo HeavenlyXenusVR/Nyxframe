@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { Bookmark, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, Heart, X } from "lucide-react";
+import { Bookmark, ChevronLeft, ChevronRight, Copy, Download, ExternalLink, Heart, Pause, Play, X } from "lucide-react";
 import { apiFetch } from "../api.js";
 import { useMediaActions } from "../hooks/useMediaActions.js";
 import { Avatar, ChipRow, glassPointerMove, ResilientImage, StatsRow } from "./ui.jsx";
@@ -18,6 +18,16 @@ export function Lightbox({ ctx, lightbox: lightboxProp }) {
   const [currentIndex, setCurrentIndex] = useState(lightbox?.index ?? 0);
   const [item, setItem] = useState(() => items[lightbox?.index ?? 0] || null);
   const [videoQuality, setVideoQuality] = useState("original");
+  // "Play all" slideshow: auto-advances every `slideshowSeconds` while
+  // playing. Stops (doesn't loop) at the end of the list -- a surprise
+  // infinite loop is worse than just stopping and leaving the last item on
+  // screen, same reasoning a real slideshow/presentation tool would use.
+  // Left deliberately independent of BackgroundMusicPlayer (no shared
+  // play-trigger exists between them, and forcing one wasn't worth adding
+  // a fragile cross-component coupling for) -- if music happens to already
+  // be playing, it simply continues in the background unaffected.
+  const [slideshowPlaying, setSlideshowPlaying] = useState(false);
+  const [slideshowSeconds, setSlideshowSeconds] = useState(5);
   const cacheRef = useRef(new Map());
   const currentIndexRef = useRef(currentIndex);
   currentIndexRef.current = currentIndex;
@@ -31,6 +41,7 @@ export function Lightbox({ ctx, lightbox: lightboxProp }) {
     setCurrentIndex(idx);
     setItem(lightbox.items[idx] || null);
     setVideoQuality("original");
+    setSlideshowPlaying(!!lightbox.autoplay);
   }, [lightbox]);
 
   const actions = useMediaActions(ctx, (updated) => {
@@ -69,6 +80,21 @@ export function Lightbox({ ctx, lightbox: lightboxProp }) {
     setItem(lightbox.items[idx] || null);
     setVideoQuality("original");
   }, [lightbox]);
+
+  // Auto-advance one slide every `slideshowSeconds`. Re-arms on every
+  // currentIndex change so each slide gets its own full interval; stops
+  // (doesn't loop) once the last item is reached.
+  useEffect(() => {
+    if (!slideshowPlaying) return;
+    const timer = setTimeout(() => {
+      if (currentIndexRef.current >= items.length - 1) {
+        setSlideshowPlaying(false);
+        return;
+      }
+      goTo(currentIndexRef.current + 1);
+    }, slideshowSeconds * 1000);
+    return () => clearTimeout(timer);
+  }, [slideshowPlaying, slideshowSeconds, currentIndex, items.length, goTo]);
 
   // Keyboard navigation — use refs so effect is stable.
   // Skip arrow keys when current item is a video: the VideoPlayer's own keyboard
@@ -201,6 +227,30 @@ export function Lightbox({ ctx, lightbox: lightboxProp }) {
               <button type="button" className="lb-counter-prev" disabled={!canPrev} onClick={() => goTo(currentIndex - 1)}>‹</button>
               <span>{currentIndex + 1} / {items.length}</span>
               <button type="button" className="lb-counter-next" disabled={!canNext} onClick={() => goTo(currentIndex + 1)}>›</button>
+            </div>
+          ) : null}
+          {items.length > 1 ? (
+            <div className="lb-slideshow">
+              <button
+                type="button"
+                className="lb-slideshow-toggle"
+                onClick={() => setSlideshowPlaying((playing) => !playing)}
+                aria-label={slideshowPlaying ? "Pause slideshow" : "Play all"}
+              >
+                {slideshowPlaying ? <Pause size={14} /> : <Play size={14} />}
+                {slideshowPlaying ? "Pause" : "Play all"}
+              </button>
+              <select
+                className="lb-slideshow-speed"
+                value={slideshowSeconds}
+                onChange={(e) => setSlideshowSeconds(Number(e.target.value))}
+                aria-label="Slideshow speed"
+              >
+                <option value={3}>3s</option>
+                <option value={5}>5s</option>
+                <option value={10}>10s</option>
+                <option value={15}>15s</option>
+              </select>
             </div>
           ) : null}
         </div>
