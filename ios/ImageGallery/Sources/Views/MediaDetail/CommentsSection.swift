@@ -6,6 +6,9 @@ struct CommentsSection: View {
     @State private var commentBody = ""
     @State private var mentionSuggestions: [GalleryUser] = []
     @State private var mentionSearchTask: Task<Void, Never>?
+    /// Which comment's "add a reaction" picker is open, if any -- at most
+    /// one at a time, same as web's single `openCommentReactionPicker`.
+    @State private var openReactionPickerCommentId: Int?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -193,6 +196,7 @@ struct CommentsSection: View {
                     }
                 }
                 Text(comment.body)
+                commentReactionRow(comment)
                 HStack(spacing: 12) {
                     if session.currentUser != nil, comment.parentCommentId == nil {
                         Button("Reply") { viewModel.replyTarget = comment }
@@ -208,5 +212,79 @@ struct CommentsSection: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    /// Compact counterpart to the post-level `ReactionTray`: emoji with a
+    /// nonzero count (or the viewer's own pick) always show as pills, and
+    /// a small "+" reveals the full emoji row to react for the first time
+    /// -- mirrors web's `renderCommentReactionRow`. Signed-out viewers see
+    /// the same pills with no tap target, same as web's `!ctx.user` branch.
+    @ViewBuilder
+    private func commentReactionRow(_ comment: Comment) -> some View {
+        let counts = comment.reactions?.counts ?? [:]
+        let myReaction = comment.reactions?.myReaction
+        let present = ReactionTray.emojis.filter { (counts[$0] ?? 0) > 0 || $0 == myReaction }
+
+        if session.currentUser == nil {
+            if !present.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(present, id: \.self) { emoji in
+                        reactionPill(emoji: emoji, count: counts[emoji] ?? 0, active: false, action: nil)
+                    }
+                }
+            }
+        } else {
+            let pickerOpen = openReactionPickerCommentId == comment.id
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 6) {
+                    ForEach(present, id: \.self) { emoji in
+                        reactionPill(emoji: emoji, count: counts[emoji] ?? 0, active: myReaction == emoji) {
+                            openReactionPickerCommentId = nil
+                            Task { await viewModel.reactToComment(comment, emoji: emoji) }
+                        }
+                    }
+                    Button {
+                        openReactionPickerCommentId = pickerOpen ? nil : comment.id
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.caption2.weight(.bold))
+                            .padding(5)
+                            .background(Color.secondary.opacity(0.12), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Add reaction")
+                }
+                if pickerOpen {
+                    HStack(spacing: 6) {
+                        ForEach(ReactionTray.emojis, id: \.self) { emoji in
+                            reactionPill(emoji: emoji, count: 0, active: false, showsCount: false) {
+                                openReactionPickerCommentId = nil
+                                Task { await viewModel.reactToComment(comment, emoji: emoji) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func reactionPill(emoji: String, count: Int, active: Bool, showsCount: Bool = true, action: (() -> Void)?) -> some View {
+        let label = HStack(spacing: 3) {
+            Text(emoji).font(.caption)
+            if showsCount, count > 0 {
+                Text("\(count)").font(.caption2.weight(.bold)).foregroundStyle(active ? Color.accentColor : Nyx.mist)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Capsule().fill(active ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.06)))
+
+        return Group {
+            if let action {
+                Button(action: action) { label }.buttonStyle(.plain)
+            } else {
+                label
+            }
+        }
     }
 }

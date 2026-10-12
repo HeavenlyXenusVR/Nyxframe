@@ -13,9 +13,17 @@ final class MediaDetailViewModel: ObservableObject {
     @Published var replyTarget: Comment?
     @Published var isTogglingLike = false
     @Published var isTogglingBookmark = false
+    /// "N people viewing this now" -- nil until the first heartbeat lands,
+    /// mirrors web's `viewingNow` (MediaDetailPage.jsx) staying null rather
+    /// than 0 before that, so `MediaDetailView` can tell "no data yet" from
+    /// "confirmed nobody else is here" and keep the badge hidden either way.
+    @Published var viewingNow: Int?
+    @Published var editHistory: [EditHistoryEntry]?
+    @Published var editHistoryError: String?
 
     let mediaId: Int
     private let api = GalleryAPIClient.shared
+    private var heartbeatTask: Task<Void, Never>?
 
     init(mediaId: Int) {
         self.mediaId = mediaId
@@ -80,6 +88,59 @@ final class MediaDetailViewModel: ObservableObject {
             Haptics.light()
         } catch {
             if !error.isCancellation { errorMessage = error.localizedDescription }
+        }
+    }
+
+    /// Same one-emoji-toggle semantics as `react(emoji:)` above, just
+    /// keyed by comment id. Patches the one affected row in `comments`
+    /// in place rather than re-fetching the whole post.
+    func reactToComment(_ comment: Comment, emoji: String) async {
+        do {
+            let reactions = try await api.reactToComment(commentId: comment.id, emoji: emoji)
+            if let index = comments.firstIndex(where: { $0.id == comment.id }) {
+                comments[index].reactions = reactions
+            }
+            Haptics.light()
+        } catch {
+            if !error.isCancellation { errorMessage = error.localizedDescription }
+        }
+    }
+
+    /// Starts (or restarts) the "N people viewing this now" heartbeat --
+    /// mirrors web's `useLiveRefresh(sendViewingHeartbeat, { interval:
+    /// 15_000, immediate: true })`. `MediaDetailView` calls `stop` when the
+    /// tab holding this screen goes inactive (same reasoning as its video
+    /// pause -- someone who switched tabs isn't actively viewing either)
+    /// and `start` again when it comes back.
+    func startViewingHeartbeat() {
+        heartbeatTask?.cancel()
+        heartbeatTask = Task { [weak self] in
+            while let self, !Task.isCancelled {
+                let count = await self.api.sendViewingHeartbeat(mediaId: self.mediaId)
+                if Task.isCancelled { return }
+                self.viewingNow = count
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+            }
+        }
+    }
+
+    func stopViewingHeartbeat() {
+        heartbeatTask?.cancel()
+        heartbeatTask = nil
+    }
+
+    /// Owner-only, lazily loaded the first time the Edit History
+    /// disclosure is expanded -- mirrors web's `MediaEditHistory`, which
+    /// fetches eagerly on mount but sits behind its own collapsed
+    /// `<details>` already; gating the fetch itself on first expansion is
+    /// the iOS-side equivalent since there's no "mounted but collapsed"
+    /// state for a SwiftUI `DisclosureGroup`.
+    func loadEditHistoryIfNeeded() async {
+        guard editHistory == nil else { return }
+        do {
+            editHistory = try await api.mediaEditHistory(mediaId: mediaId)
+        } catch {
+            if !error.isCancellation { editHistoryError = error.localizedDescription }
         }
     }
 

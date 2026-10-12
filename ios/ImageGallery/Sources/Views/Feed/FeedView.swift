@@ -15,6 +15,10 @@ struct FeedView: View {
     @State private var showingFilters = false
     /// Bumped by pull-to-refresh so the self-fetching rails reload too.
     @State private var railsReloadKey = 0
+    @State private var isPickingRandom = false
+    /// Drives navigation to the post GET /api/media/random picked --
+    /// mirrors web's "Surprise me" on DiscoverPage.jsx.
+    @State private var randomMedia: MediaItem?
 
     private var settings: UserSettings? { session.currentUser?.userSettings }
     private var gridSpacing: CGFloat { min(Appearance.gridSpacing(settings?.columnGap), 16) }
@@ -49,6 +53,9 @@ struct FeedView: View {
         .sheet(isPresented: $showingFilters) {
             FeedFilterSheet(viewModel: viewModel)
                 .presentationDetents([.medium, .large])
+        }
+        .navigationDestination(item: $randomMedia) { media in
+            MediaDetailView(mediaId: media.id)
         }
         .refreshable {
             railsReloadKey += 1
@@ -172,8 +179,44 @@ struct FeedView: View {
             }
             .buttonStyle(NyxPressStyle())
             .accessibilityLabel("Filters")
+
+            Button {
+                openRandom()
+            } label: {
+                Group {
+                    if isPickingRandom {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 17, weight: .semibold))
+                    }
+                }
+                .frame(width: 50, height: 50)
+                .nyxGlass(radius: 25)
+            }
+            .buttonStyle(NyxPressStyle())
+            .disabled(isPickingRandom)
+            .accessibilityLabel("Surprise me")
         }
         .padding(.horizontal, 20)
+    }
+
+    /// "Surprise me" -- asks the backend for one random visible post
+    /// (`GET /api/media/random`) rather than picking from whatever page of
+    /// the feed happens to be loaded on-device, so every category/tag on
+    /// the site is reachable from this button, not just what's scrolled
+    /// into view so far.
+    private func openRandom() {
+        guard !isPickingRandom else { return }
+        isPickingRandom = true
+        Task {
+            defer { isPickingRandom = false }
+            do {
+                randomMedia = try await GalleryAPIClient.shared.randomMedia()
+            } catch {
+                if !error.isCancellation { viewModel.errorMessage = error.localizedDescription }
+            }
+        }
     }
 
     // MARK: Filter shelf

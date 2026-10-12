@@ -206,6 +206,14 @@ extension GalleryAPIClient {
         let response: BackgroundMusicListResponse = try await requestJSON("/api/background-music", requiresAuth: false)
         return response.tracks
     }
+
+    /// Discover's "Surprise me" -- GET /api/media/random picks one visible
+    /// post server-side (every post the viewer could see, not just
+    /// whatever page of the feed happens to be loaded on-device).
+    func randomMedia() async throws -> MediaItem {
+        let response: MediaResponse = try await requestJSON("/api/media/random", requiresAuth: false)
+        return response.media
+    }
 }
 
 struct BackgroundMusicTrack: Decodable, Identifiable {
@@ -246,6 +254,26 @@ extension GalleryAPIClient {
     func react(mediaId: Int, emoji: String) async throws -> ReactionsSummary {
         let response: ReactionsResponse = try await requestJSON("/api/media/\(mediaId)/react", body: ReactionBody(emoji: emoji))
         return response.reactions
+    }
+
+    struct CommentReactResponse: Decodable { var commentId: Int; var reactions: ReactionsSummary }
+
+    func reactToComment(commentId: Int, emoji: String) async throws -> ReactionsSummary {
+        let response: CommentReactResponse = try await requestJSON("/api/comments/\(commentId)/react", body: ReactionBody(emoji: emoji))
+        return response.reactions
+    }
+
+    /// Heartbeat backing "N people viewing this now" (`media_active_viewers`
+    /// on the backend) -- call every ~15s while the post is on screen.
+    /// `nil` on failure (a missed heartbeat on an adult post before
+    /// verification, a transient blip) rather than throwing, since the
+    /// count is decorative and a thrown error would otherwise have to be
+    /// swallowed by every caller anyway.
+    struct ViewingHeartbeatResponse: Decodable { var viewingNow: Int? }
+
+    func sendViewingHeartbeat(mediaId: Int) async -> Int? {
+        let response: ViewingHeartbeatResponse? = try? await requestJSON("/api/media/\(mediaId)/viewing", method: "POST", body: EmptyBody(), requiresAuth: false)
+        return response?.viewingNow
     }
 
     func reportMedia(mediaId: Int, reason: String, details: String?) async throws {
@@ -662,6 +690,64 @@ extension GalleryAPIClient {
 
     func exportMyData() async throws -> Data {
         try await download("/api/me/export")
+    }
+}
+
+// MARK: - Edit history
+
+/// `{from, to}` for one changed field -- mirrors `perform_update_media`'s
+/// diff shape on the backend. `JSONValue` already decodes a JSON `null`
+/// into its own `.null` case rather than throwing, so this stays a plain
+/// `Decodable` struct with no custom `init`.
+struct EditHistoryChange: Decodable {
+    var from: JSONValue
+    var to: JSONValue
+}
+
+/// Decoded with `.convertFromSnakeCase` like every other response, which
+/// (perhaps non-obviously) also rewrites `changes`' own field-name keys --
+/// `category_id`/`is_adult` arrive here as `categoryId`/`isAdult`, not the
+/// backend's original snake_case. `MediaEditHistoryView`'s field-label and
+/// value-formatting lookups key off the camelCase forms for exactly this
+/// reason.
+struct EditHistoryEntry: Decodable, Identifiable {
+    var id: Int
+    var editorId: Int?
+    var username: String?
+    var displayName: String?
+    var changes: [String: EditHistoryChange]
+    var createdAt: String?
+}
+
+extension GalleryAPIClient {
+    private struct EditHistoryResponse: Decodable { var history: [EditHistoryEntry] }
+
+    /// Owner-only -- 403s for anyone else, enforced server-side.
+    func mediaEditHistory(mediaId: Int) async throws -> [EditHistoryEntry] {
+        let response: EditHistoryResponse = try await requestJSON("/api/media/\(mediaId)/history")
+        return response.history
+    }
+}
+
+// MARK: - Visual / reverse image search
+
+extension GalleryAPIClient {
+    /// `GET /api/media/:id/visual-similar` -- reuses that post's already-
+    /// stored perceptual hash rather than re-uploading/re-hashing its bytes.
+    func visuallySimilarMedia(mediaId: Int) async throws -> [MediaItem] {
+        let response: MediaListResponse = try await requestJSON("/api/media/\(mediaId)/visual-similar", requiresAuth: false)
+        return response.media
+    }
+
+    /// `POST /api/search/visual` -- a fresh reference image, multipart like
+    /// `analyzeMedia`. Not bound by the 25s default timeout for the same
+    /// reason `upload()` isn't there either: hashing + a full-table scan is
+    /// cheap but still a real server round trip worth a longer budget than
+    /// a plain JSON request gets.
+    func visualSearch(data: Data, fileName: String, mimeType: String) async throws -> [MediaItem] {
+        let file = MultipartFile(fieldName: "file", fileName: fileName, mimeType: mimeType, source: .data(data))
+        let response: MediaListResponse = try await upload("/api/search/visual", fields: [:], file: file, requiresAuth: false)
+        return response.media
     }
 }
 

@@ -67,6 +67,7 @@ struct MediaDetailView: View {
             setUpVideoControllerIfNeeded()
             if let media = viewModel.media { await loadPlaybackExtras(for: media) }
         }
+        .task { viewModel.startViewingHeartbeat() }
         .sheet(isPresented: $showingReport) { ReportSheet(viewModel: viewModel) }
         .sheet(isPresented: $showingEdit) { MediaEditSheet(viewModel: viewModel) }
         // Owner-only, and driven off the loaded media rather than a passed-in
@@ -93,6 +94,13 @@ struct MediaDetailView: View {
             if let media = viewModel.media {
                 FullScreenMediaView(
                     media: media,
+                    // "Play all": images only (see FullScreenMediaView's
+                    // header comment for why video stays single-item) --
+                    // the current post plus its "More like this" rail is
+                    // the one ordered list MediaDetailView has on hand,
+                    // there being no shared lightbox/grid-with-index
+                    // concept on iOS the way web's Lightbox has.
+                    slideshowItems: media.isVideo ? [] : ([media] + viewModel.similar.filter { !$0.isVideo }),
                     videoController: videoController,
                     qualityOptions: Self.qualityOptions,
                     videoQuality: videoQuality,
@@ -114,10 +122,18 @@ struct MediaDetailView: View {
         // explicitly -- otherwise a video keeps playing, with sound, from
         // a tab nobody is looking at.
         .onChange(of: tabIsActive) { isActive in
-            if !isActive { videoController?.pause() }
+            if !isActive {
+                videoController?.pause()
+                viewModel.stopViewingHeartbeat()
+            } else {
+                viewModel.startViewingHeartbeat()
+            }
         }
         .onAppear { setUpVideoControllerIfNeeded() }
-        .onDisappear { videoController?.pause() }
+        .onDisappear {
+            videoController?.pause()
+            viewModel.stopViewingHeartbeat()
+        }
     }
 
     // MARK: Nocturne layout
@@ -164,6 +180,16 @@ struct MediaDetailView: View {
 
             UploaderRow(media: media)
 
+            // Only once there are at least 2 (the viewer's own heartbeat
+            // always counts as 1, so "viewing now: 1" would just describe
+            // the viewer to themselves) -- matches web's `viewingNow >= 2`
+            // gate exactly.
+            if let viewingNow = viewModel.viewingNow, viewingNow >= 2 {
+                Label("\(viewingNow) people viewing this now", systemImage: "eye")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(Nyx.mist)
+            }
+
             MediaActionBar(
                 media: media,
                 isTogglingLike: viewModel.isTogglingLike,
@@ -203,6 +229,15 @@ struct MediaDetailView: View {
             if session.currentUser != nil {
                 PersonalTagsSection(viewModel: viewModel)
             }
+
+            // Owner-only, same gate as the Edit toolbar button above.
+            if let viewerId = session.currentUser?.id, media.userId == viewerId {
+                DisclosureGroup("Edit history") {
+                    MediaEditHistoryView(viewModel: viewModel)
+                        .padding(.top, 8)
+                }
+                .font(.subheadline.weight(.semibold))
+            }
         }
         .padding(18)
         .nyxGlass(radius: Nyx.Radius.panel)
@@ -220,7 +255,16 @@ struct MediaDetailView: View {
     private var similarSection: some View {
         if !viewModel.similar.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
-                NyxSectionHeader(eyebrow: "Constellation", title: "More like this")
+                NyxSectionHeader(eyebrow: "Constellation", title: "More like this") {
+                    // Reuses the already-stored perceptual hash rather than
+                    // re-uploading this post's own image -- image posts
+                    // only, same restriction the backend's visual-similar
+                    // route enforces (videos have no fingerprint).
+                    if viewModel.media?.isVideo == false {
+                        NavigationLink("Find visually similar") { VisualSearchView(seedMediaId: viewModel.mediaId) }
+                            .font(.system(.footnote, design: .rounded).weight(.semibold))
+                    }
+                }
                 SimilarMediaRail(items: viewModel.similar)
             }
             .padding(.top, 6)

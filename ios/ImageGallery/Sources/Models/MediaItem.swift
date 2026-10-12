@@ -74,6 +74,11 @@ struct Comment: Codable, Identifiable {
     var displayName: String?
     var userAvatarPath: String?
     var createdAt: String?
+    /// Per-comment reaction counts, batched onto `/api/media/{id}` by the
+    /// backend. Absent on freshly-posted comments (the add-comment response
+    /// has no reactions yet) -- `CommentsSection` treats a nil the same as
+    /// an all-zero summary.
+    var reactions: ReactionsSummary?
 }
 
 struct CategorySummary: Codable, Identifiable, Hashable {

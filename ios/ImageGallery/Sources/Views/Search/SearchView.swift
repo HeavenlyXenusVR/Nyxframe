@@ -69,6 +69,13 @@ struct SearchView: View {
         .navigationTitle("Search")
         .nyxScreen()
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                NavigationLink(destination: VisualSearchView()) {
+                    Label("Visual search", systemImage: "camera.viewfinder")
+                }
+            }
+        }
         .onChange(of: query) { newValue in
             generation += 1
             let token = generation
