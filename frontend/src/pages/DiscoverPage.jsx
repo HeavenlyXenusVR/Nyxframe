@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { Bell, Columns2, Grid2X2, RefreshCw, Save, Search, SlidersHorizontal, Sparkles, X as XIcon } from "lucide-react";
 import { apiFetch, cachedApiFetch, clearApiCache, toQuery } from "../api.js";
 import { PAGE_SIZE } from "../config.js";
-import { CategoryPills, DiscoverMemories, DiscoverTrending } from "../components/discover.jsx";
+import { CategoryPills, DiscoverContinueWatching, DiscoverMemories, DiscoverTrending } from "../components/discover.jsx";
 import { MediaGrid } from "../components/media.jsx";
 import { EmptyState, Notice, Page, Segmented, TagCloud } from "../components/ui.jsx";
 import { retryDelayMs, useAutoRetry } from "../hooks/useAutoRetry.js";
@@ -474,6 +474,7 @@ export function DiscoverPage({ ctx }) {
 
   return (
     <Page title="Discover" header={hero} className="page-discover">
+      {!filterChips.length ? <DiscoverContinueWatching ctx={ctx} /> : null}
       {!filterChips.length ? <DiscoverTrending /> : null}
       {!filterChips.length ? <DiscoverMemories ctx={ctx} /> : null}
 

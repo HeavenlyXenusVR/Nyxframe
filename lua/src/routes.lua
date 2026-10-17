@@ -424,6 +424,41 @@ function M.live_checks(req)
   }
 end
 
+-- GET /api/status -- public uptime/status page. New feature, 2026-10-11:
+-- M.health/M.live_checks already exist but are shaped for the admin ops
+-- panel and this project's own tooling (schema name, upload-size limits,
+-- a session check) -- nothing before this gave an ordinary visitor a
+-- simple "is the site healthy, has anything gone wrong lately" view.
+-- Deliberately public (no current_user/require_site_owner check) and
+-- narrower than live_checks' payload -- a status page shouldn't leak
+-- internal config.
+--
+-- Incidents are a separate, human-curated table (status_incidents, see
+-- pg_add_status_incidents.sql), not a dump of telemetry_events -- an
+-- incident is "we know about this, here's what happened," written by the
+-- site owner (M.admin_create_incident below), not an automatic event feed.
+function M.public_status(req)
+  local db_ok = db.ping()
+  local incidents = db.fetchall(
+    "SELECT id, title, description, severity, started_at, resolved_at FROM status_incidents ORDER BY started_at DESC LIMIT 20"
+  ) or {}
+  for _, row in ipairs(incidents) do
+    row.id = db.toint(row.id, row.id)
+    row.resolved = row.resolved_at ~= nil and row.resolved_at ~= cjson.null
+  end
+  local active_count = 0
+  for _, row in ipairs(incidents) do
+    if not row.resolved then active_count = active_count + 1 end
+  end
+  return 200, {
+    ok = db_ok and active_count == 0,
+    database_reachable = db_ok and true or false,
+    active_incident_count = active_count,
+    incidents = arr(incidents),
+    server_time = os.date("!%Y-%m-%dT%H:%M:%S") .. "Z",
+  }
+end
+
 -- ---------------------------------------------------------------------------
 -- Auth: register / login / logout / me / 2fa verify
 -- ---------------------------------------------------------------------------
@@ -1581,6 +1616,103 @@ function M.media_trending(req)
   return 200, { media = arr(rows), days = tonumber(days), limit = limit }
 end
 
+-- ---------------------------------------------------------------------------
+-- GET /api/feed/for-you -- personalized ranked feed. New feature,
+-- 2026-10-11: feed_following/feed_liked are plain filters (exactly the
+-- people you follow / exactly what you've liked, in strict recency order)
+-- and feed_signal is just a "new since last check" counter -- nothing
+-- before this blended multiple signals into an actual ranking.
+--
+-- Two cheap pre-queries (the viewer's followed-user ids and their top
+-- liked tags) feed a single ORDER BY expression on top of
+-- fetch_media_feed's already-verified, already-deployed base query --
+-- same division of labor list_media/media_trending/leaderboard already
+-- use: Postgres does the ranking, Lua only shapes the inputs to it.
+--
+-- Own posts are NOT excluded: confirmed live 2026-10-11, every single
+-- public post on this deployment belongs to the site owner (a one-creator
+-- gallery in practice, not a populated multi-creator feed) -- excluding
+-- the viewer's own posts would make this return nothing at all for the one
+-- account that would ever call it. Still genuinely useful there: it
+-- resurfaces older posts matching the viewer's own like/tag history
+-- (rediscovery) ranked above fresher-but-less-matching ones. If/when other
+-- creators' public posts exist, the follow/tag/engagement signals rank
+-- those exactly the same way -- nothing here assumes a single-creator
+-- library, it just doesn't special-case the self-exclusion a populated
+-- multi-creator feed would usually want.
+--
+-- Score = (follow bonus + tag-affinity bonus + engagement) / age-in-days,
+-- i.e. recency-decayed rather than a hard recency cutoff -- a post from
+-- someone you follow or on a topic you like stays competitive for days,
+-- not just minutes, while an old post with no signal still eventually
+-- sinks below fresher ones with equal signal.
+function M.feed_for_you(req)
+  local user, auth, status, body = current_user(req)
+  if not user then return status, body end
+  local viewer0 = tostring(user.id)
+  local limit = bounded_limit(req.query.limit, 30)
+  local offset = bounded_offset(req.query.offset)
+
+  local followed_rows = db.fetchall("SELECT followed_id FROM user_follows WHERE follower_id=%s", viewer0)
+  local followed_ids = {}
+  for _, row in ipairs(followed_rows or {}) do
+    followed_ids[#followed_ids + 1] = tostring(db.toint(row.followed_id, row.followed_id))
+  end
+  local followed_csv = #followed_ids > 0 and table.concat(followed_ids, ",") or "-1"
+
+  local tag_rows = db.fetchall(
+    [[
+      SELECT tag, COUNT(*) AS n
+      FROM media_likes ml
+      JOIN media_items m ON m.id = ml.media_id AND m.deleted_at IS NULL
+      CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(m.tags::jsonb, '[]'::jsonb)) AS tag
+      WHERE ml.user_id=%s
+      GROUP BY tag
+      ORDER BY n DESC
+      LIMIT 8
+    ]],
+    viewer0
+  )
+  local tag_literals = {}
+  for _, row in ipairs(tag_rows or {}) do
+    -- Standard SQL single-quote escaping for a literal going straight into
+    -- the ARRAY[...] constructor below -- tags are normalized to a narrow
+    -- charset at upload time (normalize_upload_tag), but escaping
+    -- defensively costs nothing and this is the one place a tag's raw text
+    -- is spliced into SQL rather than bound as a query parameter.
+    tag_literals[#tag_literals + 1] = "'" .. tostring(row.tag):gsub("'", "''") .. "'"
+  end
+  local tags_array_sql = #tag_literals > 0
+    and ("ARRAY[" .. table.concat(tag_literals, ",") .. "]::text[]")
+    or "ARRAY[]::text[]"
+
+  -- NOT `like_count`/`comment_count` (fetch_media_feed's own SELECT-list
+  -- aliases for these exact subqueries) -- confirmed live against this
+  -- deployment's Postgres: an ORDER BY expression may reference an output
+  -- column's alias only when the ENTIRE ORDER BY item is that bare
+  -- identifier, not when it's embedded inside a larger expression like
+  -- `like_count * 3`. Using the alias there 500s with "column ... does not
+  -- exist". Re-stating both subqueries inline instead -- same fix
+  -- media_trending's own ORDER BY already applies for the identical reason
+  -- (see its header comment).
+  local order_sql = string.format(
+    [[
+      ((CASE WHEN m.user_id IN (%s) THEN 50 ELSE 0 END)
+        + (CASE WHEN m.tags IS NOT NULL AND m.tags::jsonb ?| %s THEN 20 ELSE 0 END)
+        + (m.views * 0.05
+           + (SELECT COUNT(DISTINCT lk.user_id) FROM media_likes lk WHERE lk.media_id = m.id) * 3
+           + (SELECT COUNT(*) FROM media_comments cmc WHERE cmc.media_id = m.id) * 2))
+      / (1 + EXTRACT(EPOCH FROM (now() - m.created_at)) / 86400.0) DESC,
+      m.created_at DESC
+    ]],
+    followed_csv, tags_array_sql
+  )
+
+  local rows, err = fetch_media_feed(req, viewer0, nil, nil, order_sql, limit, offset)
+  if err then return 500, { detail = "Query failed: " .. tostring(err) } end
+  return 200, { media = arr(rows), limit = limit, offset = offset }
+end
+
 -- GET /api/leaderboard?window=7d|30d|all -- public creator ranking. Net-new
 -- (no dead frontend route recovered here, unlike feed_following/feed_liked/
 -- media_trending above). Ranks by the same visibility guard as list_media,
@@ -1838,6 +1970,127 @@ function M.creator_stats(req)
   return 200, result
 end
 
+-- GET /api/me/year-recap?year=YYYY -- personalized year-in-review. New
+-- feature, 2026-10-11, built on the same aggregate-query style as
+-- creator_stats_for above, scoped to one calendar year and cached (see
+-- pg_add_year_recap_cache.sql) since it's only worth computing once per
+-- user per year, not on every view -- a past year's recap can never
+-- change, so it's served from cache unconditionally; the CURRENT
+-- (in-progress) year's cache is only trusted for an hour before
+-- recomputing, same staleness tolerance the rest of this file's
+-- request-time caching already uses (see background_candidate_rows for
+-- the identical pattern).
+function M.year_recap(req)
+  local user, auth, status, body = current_user(req)
+  if not user then return status, body end
+  local current_year = tonumber(os.date("!%Y"))
+  local year = tonumber(req.query.year) or current_year
+  if year < 2020 or year > current_year then return 400, { detail = "Invalid year." } end
+  local viewer0 = tostring(user.id)
+  local year_str = tostring(year)
+
+  local cached = db.fetchone(
+    "SELECT payload, computed_at FROM user_year_recap_cache WHERE user_id=%s AND year=%s",
+    viewer0, year_str
+  )
+  if cached then
+    if year < current_year then
+      return 200, cjson.decode(cached.payload)
+    end
+    local age_row = db.fetchone("SELECT (now() - %s::timestamp < interval '1 hour') AS fresh", cached.computed_at)
+    if age_row and db.tobool(age_row.fresh) then
+      return 200, cjson.decode(cached.payload)
+    end
+  end
+
+  local origin = request_origin(req)
+
+  local totals = db.fetchone(
+    [[
+      SELECT COUNT(*) AS post_count,
+             COALESCE(SUM(m.views), 0) AS total_views,
+             COUNT(DISTINCT l.user_id || ':' || l.media_id) AS total_likes_received,
+             COUNT(DISTINCT cm.id) AS total_comments_received
+      FROM media_items m
+      LEFT JOIN media_likes l ON l.media_id = m.id
+      LEFT JOIN media_comments cm ON cm.media_id = m.id
+      WHERE m.user_id=%s AND m.deleted_at IS NULL AND EXTRACT(YEAR FROM m.created_at) = %s
+    ]],
+    viewer0, year_str
+  )
+
+  local top_post = db.fetchone(
+    [[
+      SELECT m.id, m.title, m.media_kind, m.views,
+             COUNT(DISTINCT l.user_id) AS like_count
+      FROM media_items m
+      LEFT JOIN media_likes l ON l.media_id = m.id
+      WHERE m.user_id=%s AND m.deleted_at IS NULL AND EXTRACT(YEAR FROM m.created_at) = %s
+      GROUP BY m.id
+      ORDER BY like_count DESC, m.views DESC
+      LIMIT 1
+    ]],
+    viewer0, year_str
+  )
+
+  local top_tag_rows = db.fetchall(
+    [[
+      SELECT tag, COUNT(*) AS n
+      FROM media_items m
+      CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(m.tags::jsonb, '[]'::jsonb)) AS tag
+      WHERE m.user_id=%s AND m.deleted_at IS NULL AND EXTRACT(YEAR FROM m.created_at) = %s
+      GROUP BY tag ORDER BY n DESC LIMIT 1
+    ]],
+    viewer0, year_str
+  )
+
+  local likes_given = db.fetchone(
+    [[
+      SELECT COUNT(*) AS n FROM media_likes l
+      JOIN media_items m ON m.id = l.media_id
+      WHERE l.user_id=%s AND EXTRACT(YEAR FROM l.created_at) = %s
+    ]],
+    viewer0, year_str
+  )
+
+  local joined_row = db.fetchone("SELECT created_at FROM users WHERE id=%s", viewer0)
+
+  local payload = {
+    year = year,
+    post_count = db.toint(totals and totals.post_count, 0),
+    total_views = db.toint(totals and totals.total_views, 0),
+    total_likes_received = db.toint(totals and totals.total_likes_received, 0),
+    total_comments_received = db.toint(totals and totals.total_comments_received, 0),
+    likes_given = db.toint(likes_given and likes_given.n, 0),
+    top_tag = (top_tag_rows and top_tag_rows[1] and top_tag_rows[1].tag) or cjson.null,
+    member_since = (joined_row and joined_row.created_at) or cjson.null,
+    top_post = cjson.null,
+  }
+  if top_post then
+    local top_post_id = db.toint(top_post.id, top_post.id)
+    payload.top_post = {
+      id = top_post_id,
+      title = top_post.title,
+      views = db.toint(top_post.views, 0),
+      like_count = db.toint(top_post.like_count, 0),
+      thumb_url = (top_post.media_kind == "image" or top_post.media_kind == "video")
+        and append_query(origin .. "/api/media/" .. top_post_id .. "/thumb", "w", "640")
+        or nil,
+    }
+  end
+
+  db.execute(
+    [[
+      INSERT INTO user_year_recap_cache (user_id, year, payload, computed_at)
+      VALUES (%s, %s, %s, now())
+      ON CONFLICT (user_id, year) DO UPDATE SET payload=EXCLUDED.payload, computed_at=now()
+    ]],
+    viewer0, year_str, cjson.encode(payload)
+  )
+
+  return 200, payload
+end
+
 -- ---------------------------------------------------------------------------
 -- Single media item: detail / like / bookmark / comment / react
 -- Mirrors app/routers/media.py's media_detail/like_media/bookmark_media/
@@ -1882,6 +2135,116 @@ local function viewer_adult_allowed(viewer_id)
   if not viewer_id then return false end
   local viewer = get_user(viewer_id)
   return viewer ~= nil and nn(viewer.age_verified_at) ~= nil and viewer.adult_content_consent
+end
+
+-- ---------------------------------------------------------------------------
+-- Resume/continue-watching. New feature, 2026-10-11: nothing tracked
+-- playback position before this -- reopening a video always started over
+-- from 0.
+--
+-- POST /api/media/:media_id/watch-progress { position_seconds,
+-- duration_seconds } -- called periodically by the player (every ~5-10s
+-- while playing, and on unload/navigation-away), not on every timeupdate
+-- tick, so write volume stays low regardless of how it's wired up client-
+-- side.
+--
+-- Optimization: trivial progress is never persisted. The first 5 seconds
+-- of a video isn't worth resuming into, and a near-finished watch (>=95%)
+-- should fall off "continue watching" entirely rather than be saved and
+-- then filtered back out on every read -- both cases DELETE any existing
+-- row instead of writing a value nothing would ever show, which also
+-- means a video a viewer finishes naturally stops cluttering their
+-- continue-watching list without a separate cleanup pass.
+function M.save_watch_progress(req)
+  local user, auth, status, body = current_user(req)
+  if not user then return status, body end
+  local media_id = tonumber(req.params.media_id)
+  if not media_id then return 404, { detail = "Media not found." } end
+  local payload = json_body(req)
+  local position = tonumber(payload.position_seconds)
+  local duration = tonumber(payload.duration_seconds)
+  if not position or position < 0 then return 400, { detail = "position_seconds is required." } end
+
+  local near_start = position < 5
+  local near_end = duration and duration > 0 and (position / duration) >= 0.95
+  if near_start or near_end then
+    db.execute("DELETE FROM media_watch_progress WHERE user_id=%s AND media_id=%s", user.id, tostring(media_id))
+    return 200, { saved = false, cleared = true }
+  end
+
+  db.execute(
+    [[
+      INSERT INTO media_watch_progress (user_id, media_id, position_seconds, duration_seconds, updated_at)
+      VALUES (%s, %s, %s, %s, now())
+      ON CONFLICT (user_id, media_id) DO UPDATE SET
+        position_seconds=EXCLUDED.position_seconds,
+        duration_seconds=EXCLUDED.duration_seconds,
+        updated_at=now()
+    ]],
+    user.id, tostring(media_id), tostring(position), duration and tostring(duration) or nil
+  )
+  return 200, { saved = true }
+end
+
+-- GET /api/media/:media_id/watch-progress -- the player calls this once on
+-- load to decide whether to offer/jump to a resume point.
+function M.watch_progress(req)
+  local user, auth, status, body = current_user(req)
+  if not user then return status, body end
+  local media_id = tonumber(req.params.media_id)
+  if not media_id then return 404, { detail = "Media not found." } end
+  local row = db.fetchone(
+    "SELECT position_seconds, duration_seconds, updated_at FROM media_watch_progress WHERE user_id=%s AND media_id=%s",
+    user.id, tostring(media_id)
+  )
+  if not row then return 200, { position_seconds = cjson.null, duration_seconds = cjson.null } end
+  return 200, {
+    position_seconds = tonumber(row.position_seconds),
+    duration_seconds = row.duration_seconds and tonumber(row.duration_seconds) or cjson.null,
+    updated_at = row.updated_at,
+  }
+end
+
+-- GET /api/me/continue-watching -- the "Continue Watching" rail. Reuses
+-- fetch_media_by_id + decode_media_row (the exact shape every other
+-- single-item view already returns -- thumbnail/category/user fields
+-- included) rather than hand-rolling a second, narrower media shape just
+-- for this list. A per-row lookup, not a single joined query: this list is
+-- capped at a small limit and read far less often than it's written
+-- (every few seconds of playback vs. once per rail view), so trading a
+-- handful of extra cheap-by-primary-key queries for reusing the already-
+-- correct decoration logic is the right side of that tradeoff here.
+function M.continue_watching(req)
+  local user, auth, status, body = current_user(req)
+  if not user then return status, body end
+  local viewer0 = tostring(user.id)
+  local limit = bounded_limit(req.query.limit, 12, 30)
+  local adult_allowed = viewer_adult_allowed(viewer0)
+
+  local progress_rows = db.fetchall(
+    [[
+      SELECT wp.media_id, wp.position_seconds, wp.duration_seconds, wp.updated_at
+      FROM media_watch_progress wp
+      JOIN media_items m ON m.id = wp.media_id AND m.deleted_at IS NULL
+      WHERE wp.user_id=%s
+      ORDER BY wp.updated_at DESC
+      LIMIT %s
+    ]],
+    viewer0, tostring(limit)
+  )
+
+  local results = {}
+  for _, p in ipairs(progress_rows or {}) do
+    local item = fetch_media_by_id(db.toint(p.media_id, p.media_id), viewer0)
+    if item then
+      decode_media_row(item, adult_allowed, req)
+      item.watch_position_seconds = tonumber(p.position_seconds)
+      item.watch_duration_seconds = p.duration_seconds and tonumber(p.duration_seconds) or cjson.null
+      item.watch_updated_at = p.updated_at
+      results[#results + 1] = item
+    end
+  end
+  return 200, { media = results, limit = limit }
 end
 
 -- GET /api/media/random -- confirmed live-404ing: DiscoverPage.jsx's
@@ -3419,6 +3782,22 @@ local function finalize_upload(req, user, source, original_filename, form)
   end
   local publish_at, publish_at_err = parse_publish_at(form.publish_at)
   if publish_at_err then return 400, { detail = publish_at_err } end
+  -- Ephemeral/"stories" posts, 2026-10-11: an optional self-destruct timer
+  -- rather than a new post type -- everything else about the post (kind,
+  -- visibility, comments, etc.) works exactly as normal, it just stops
+  -- being visible once expires_at passes. Computed as a DB-side interval
+  -- add (not `os.time() + hours*3600` in Lua) so this can never drift from
+  -- whatever clock Postgres's own `now()` uses -- the same clock every
+  -- expiry check below compares against.
+  local expires_in_hours = tonumber(form.expires_in_hours)
+  local expires_at = nil
+  if expires_in_hours then
+    if expires_in_hours < 1 or expires_in_hours > 168 then
+      return 400, { detail = "expires_in_hours must be between 1 and 168 (7 days)." }
+    end
+    local erow = db.fetchone("SELECT (now() + (%s || ' hours')::interval) AS ts", tostring(expires_in_hours))
+    expires_at = erow and nn(erow.ts)
+  end
   local comments_enabled = form_bool(form.comments_enabled, true)
   local downloads_enabled = form_bool(form.downloads_enabled, true)
   local is_adult_input = form_bool(form.is_adult, false)
@@ -3552,8 +3931,8 @@ local function finalize_upload(req, user, source, original_filename, form)
         (user_id, category_id, subcategory_id, title, description, tags, media_kind, mime_type, original_filename,
          storage_path, file_size, media_file_id, content_sha256, visibility, comments_enabled, downloads_enabled,
          is_adult, adult_marked_by_user, adult_marked_by_ai, moderation_status, moderation_score, moderation_reason, moderated_at,
-         image_phash, image_dhash, image_width, image_height, dominant_color, publish_at, source_url)
-      VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now(),%s,%s,%s,%s,%s,%s,%s)
+         image_phash, image_dhash, image_width, image_height, dominant_color, publish_at, source_url, expires_at)
+      VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now(),%s,%s,%s,%s,%s,%s,%s,%s)
       RETURNING id
     ]],
     tostring(user.id), tostring(category_id), subcategory_id and tostring(subcategory_id) or nil,
@@ -3565,7 +3944,7 @@ local function finalize_upload(req, user, source, original_filename, form)
     fingerprint and fingerprint.image_phash or nil, fingerprint and fingerprint.image_dhash or nil,
     fingerprint and fingerprint.image_width and tostring(fingerprint.image_width) or nil,
     fingerprint and fingerprint.image_height and tostring(fingerprint.image_height) or nil,
-    fingerprint and fingerprint.dominant_color or nil, publish_at, source_url
+    fingerprint and fingerprint.dominant_color or nil, publish_at, source_url, expires_at
   )
   finalize_upload_debug_mark("media_items insert done", debug_t0)
   if not row then return 500, { detail = "Could not save media: " .. tostring(insert_err) } end
@@ -3576,6 +3955,15 @@ local function finalize_upload(req, user, source, original_filename, form)
   local adult_allowed = viewer_adult_allowed(tostring(user.id))
   local enriched = decode_media_row(item, adult_allowed, req)
   finalize_upload_debug_mark("decode_media_row done", debug_t0)
+  -- Pre-render the default-grid-width thumbnail now instead of waiting for
+  -- the first viewer (usually the uploader themselves, seconds from now)
+  -- to hit M.serve_media_thumb's cache-miss path -- see prewarm_video_thumb's
+  -- header comment. copas.addthread so this never delays THIS response:
+  -- same fire-and-forget contract as notify_discord_upload above.
+  if media_kind == "video" then
+    local copas_ok, copas = pcall(require, "copas")
+    if copas_ok then copas.addthread(function() prewarm_video_thumb(media_id, item) end) end
+  end
   notify_discord_upload(req, user, enriched)
   finalize_upload_debug_mark("notify_discord_upload done", debug_t0)
   -- Scheduled posts (future publish_at) aren't visible yet, so saved-search
@@ -3589,7 +3977,15 @@ local function finalize_upload(req, user, source, original_filename, form)
     -- create_notification's own push.notify hook) the same way saved-
     -- search subscribers just did above -- same gating, since neither
     -- should fire for something that isn't actually visible yet.
-    local followers = db.fetchall("SELECT follower_id FROM user_follows WHERE followed_id=%s", tostring(user.id))
+    -- `notifications_muted=false` (per-follow mute, 2026-10-11 -- see
+    -- M.set_follow_mute) filters this at the query level rather than
+    -- fetching every follower and skipping muted ones in Lua: same
+    -- "narrow the row set in SQL, don't post-filter a full fetch" pattern
+    -- as the tag-rename UPDATE's `tags::jsonb ? %s` above.
+    local followers = db.fetchall(
+      "SELECT follower_id FROM user_follows WHERE followed_id=%s AND notifications_muted=false",
+      tostring(user.id)
+    )
     for _, f in ipairs(followers) do
       create_notification(db.toint(f.follower_id, f.follower_id), user.id, "new_upload", media_id, title)
     end
@@ -5189,6 +5585,25 @@ function M.delete_saved_search(req)
   return 200, { deleted = true }
 end
 
+-- PATCH /api/me/saved-searches/:search_id/mute { muted: bool } -- per-saved-
+-- search notification muting, 2026-10-11 (see notify_matching_saved_searches'
+-- own comment on the check this backs). A muted search keeps running
+-- (last_notified_at still advances) and can be unmuted later without losing
+-- anything -- this never touches the search itself, only whether a match
+-- creates a notification.
+function M.set_saved_search_mute(req)
+  local user, auth, status, body = current_user(req)
+  if not user then return status, body end
+  local search_id = tonumber(req.params.search_id)
+  if not search_id then return 404, { detail = "Saved search not found." } end
+  local payload = json_body(req)
+  local muted = db.tobool(payload.muted)
+  local existing = db.fetchone("SELECT id FROM saved_searches WHERE id=%s AND user_id=%s", tostring(search_id), user.id)
+  if not existing then return 404, { detail = "Saved search not found." } end
+  db.execute("UPDATE saved_searches SET notifications_muted=%s WHERE id=%s AND user_id=%s", muted, tostring(search_id), user.id)
+  return 200, { id = search_id, notifications_muted = muted }
+end
+
 -- Mirrors _media_matches_saved_search_filter(): evaluates a saved-search
 -- filter against a single freshly-uploaded item in Lua rather than SQL, same
 -- rationale as Python (runs once per upload against a handful of saved
@@ -5230,7 +5645,11 @@ end
 -- M.upload_media -- see that declaration's comment for why.
 notify_matching_saved_searches = function(uploader_id, item)
   local ok, err = pcall(function()
-    local rows = db.fetchall("SELECT * FROM saved_searches WHERE user_id != %s", tostring(uploader_id))
+    -- `notifications_muted=false` (per-saved-search mute, 2026-10-11 -- see
+    -- M.set_saved_search_mute): a muted search still runs (so last_notified_at
+    -- keeps advancing and the saved search itself keeps working if unmuted
+    -- later) but never calls create_notification.
+    local rows = db.fetchall("SELECT * FROM saved_searches WHERE user_id != %s AND notifications_muted=false", tostring(uploader_id))
     for _, row in ipairs(rows) do
       decode_saved_search(row)
       if media_matches_saved_search_filter(item, row.filter_json) then
@@ -5946,7 +6365,8 @@ function M.search_users(req)
              u.last_seen_at,
              COUNT(DISTINCT m.id) AS media_count,
              COUNT(DISTINCT f.follower_id) AS follower_count,
-             MAX(CASE WHEN mine.follower_id IS NULL THEN 0 ELSE 1 END) AS followed_by_me
+             MAX(CASE WHEN mine.follower_id IS NULL THEN 0 ELSE 1 END) AS followed_by_me,
+             MAX(CASE WHEN mine.notifications_muted THEN 1 ELSE 0 END) AS follow_notifications_muted
       FROM users u
       LEFT JOIN media_items m ON m.user_id=u.id AND m.deleted_at IS NULL AND m.visibility='public'
       LEFT JOIN user_follows f ON f.followed_id=u.id
@@ -6025,6 +6445,7 @@ function M.search_users(req)
     row.media_count = db.toint(row.media_count, 0)
     row.follower_count = db.toint(row.follower_count, 0)
     row.followed_by_me = db.tobool(row.followed_by_me)
+    row.follow_notifications_muted = db.tobool(row.follow_notifications_muted)
     if not viewer_id then
       row.friend_status = "none"
     elseif tostring(viewer_id) == tostring(row.id) then
@@ -6032,6 +6453,108 @@ function M.search_users(req)
     else
       row.friend_status = statuses[tostring(row.id)] or "none"
     end
+    with_user_urls(req, row)
+  end
+  return 200, { users = arr(rows), limit = limit }
+end
+
+-- ---------------------------------------------------------------------------
+-- Suggested accounts to follow. New feature, 2026-10-11: no recommendation
+-- surface existed for PEOPLE before this (M.similar_media already covers
+-- "more like this post" via perceptual hash, but nothing suggested WHO to
+-- follow).
+--
+-- Two signals, both restricted to accounts the viewer doesn't already
+-- follow/isn't blocked by either direction:
+--   1. Second-degree follows -- people followed by people the viewer
+--      follows. Weighted by how many of the viewer's own follows also
+--      follow that candidate (a candidate followed by 5 of your follows
+--      outranks one followed by 1).
+--   2. Creators of media the viewer has liked -- weighted 2x a single
+--      mutual-follow point, since an explicit like is a stronger signal
+--      than "someone I follow happens to follow them too."
+-- A brand new account (no follows, no likes) has zero rows from either
+-- signal, so this falls back to the simplest honest default: the
+-- most-followed public accounts site-wide, excluding self/blocks, same as
+-- any "trending creators" list would show.
+--
+-- One combined query (UNION ALL + GROUP BY SUM) rather than two round
+-- trips plus a Lua-side merge -- Postgres does the ranking, this just
+-- shapes the output, same division of labor as every other listing route
+-- in this file.
+function M.suggested_users(req)
+  local user, auth, status, body = current_user(req)
+  if not user then return status, body end
+  local viewer0 = tostring(user.id)
+  local limit = bounded_limit(req.query.limit, 10, 30)
+
+  local rows, err = db.fetchall(
+    [[
+      WITH my_follows AS (
+        SELECT followed_id FROM user_follows WHERE follower_id=%s
+      ),
+      not_blocked AS (
+        SELECT u.id FROM users u
+        WHERE u.id != %s
+          AND u.id NOT IN (SELECT followed_id FROM my_follows)
+          AND u.id NOT IN (SELECT blocked_id FROM user_blocks WHERE blocker_id=%s AND kind='block')
+          AND u.id NOT IN (SELECT blocker_id FROM user_blocks WHERE blocked_id=%s AND kind='block')
+      ),
+      signals AS (
+        SELECT uf2.followed_id AS user_id, COUNT(*)::real AS score
+        FROM user_follows uf1
+        JOIN user_follows uf2 ON uf2.follower_id = uf1.followed_id
+        WHERE uf1.follower_id = %s
+        GROUP BY uf2.followed_id
+        UNION ALL
+        SELECT m.user_id AS user_id, COUNT(*)::real * 2 AS score
+        FROM media_likes ml
+        JOIN media_items m ON m.id = ml.media_id AND m.deleted_at IS NULL
+        WHERE ml.user_id = %s
+        GROUP BY m.user_id
+      ),
+      ranked AS (
+        SELECT s.user_id, SUM(s.score) AS total_score
+        FROM signals s
+        JOIN not_blocked nb ON nb.id = s.user_id
+        GROUP BY s.user_id
+        UNION ALL
+        -- Fallback tier: most-followed public accounts, only used to pad
+        -- out past however many real signal-based rows exist (LIMIT below
+        -- always prefers the signal rows since they're unioned first and
+        -- ORDER BY puts is_fallback before score).
+        SELECT nb.id AS user_id, 0 AS total_score
+        FROM not_blocked nb
+        JOIN users u2 ON u2.id = nb.id
+        WHERE u2.public_profile
+      )
+      SELECT r.user_id AS id,
+             MAX(r.total_score) AS total_score,
+             u.username, u.display_name, u.bio, u.profile_headline, u.avatar_path,
+             u.profile_color, u.public_profile,
+             COUNT(DISTINCT f.follower_id) AS follower_count
+      FROM ranked r
+      JOIN users u ON u.id = r.user_id
+      LEFT JOIN user_follows f ON f.followed_id = u.id
+      GROUP BY r.user_id, u.username, u.display_name, u.bio, u.profile_headline,
+               u.avatar_path, u.profile_color, u.public_profile
+      ORDER BY (MAX(r.total_score) > 0) DESC, MAX(r.total_score) DESC, follower_count DESC
+      LIMIT %s
+    ]],
+    viewer0, viewer0, viewer0, viewer0, viewer0, viewer0, tostring(limit)
+  )
+  if err then return 500, { detail = "Query failed: " .. tostring(err) } end
+
+  for _, row in ipairs(rows) do
+    row.id = db.toint(row.id, row.id)
+    row.follower_count = db.toint(row.follower_count, 0)
+    row.total_score = tonumber(row.total_score) or 0
+    row.public_profile = db.tobool(row.public_profile)
+    if not row.public_profile then
+      row.display_name = row.username
+      row.bio, row.profile_headline, row.avatar_path = nil, nil, nil
+    end
+    row.match_reason = row.total_score > 0 and "signal" or "trending"
     with_user_urls(req, row)
   end
   return 200, { users = arr(rows), limit = limit }
@@ -6074,6 +6597,7 @@ local function get_public_profile(req, username, viewer_id)
              COUNT(DISTINCT f2.followed_id) AS following_count,
              COUNT(DISTINCT CASE WHEN fr.status='accepted' AND (fr.requester_id=u.id OR fr.addressee_id=u.id) THEN fr.id END) AS friend_count,
              MAX(CASE WHEN f3.follower_id::text=%s THEN 1 ELSE 0 END) AS followed_by_me,
+             MAX(CASE WHEN f3.notifications_muted THEN 1 ELSE 0 END) AS follow_notifications_muted,
              (now() - u.last_seen_at) <= interval '180 seconds' AS is_online
       FROM users u
       LEFT JOIN media_items m ON m.user_id=u.id AND m.deleted_at IS NULL AND (m.visibility='public' OR m.user_id::text=%s)
@@ -6097,6 +6621,7 @@ local function get_public_profile(req, username, viewer_id)
   row.following_count = db.toint(row.following_count, 0)
   row.friend_count = db.toint(row.friend_count, 0)
   row.followed_by_me = db.tobool(row.followed_by_me)
+  row.follow_notifications_muted = db.tobool(row.follow_notifications_muted)
   row.is_online = db.tobool(row.is_online)
   row.friend_status = viewer_id and friend_status(viewer_id, row.id) or "none"
 
@@ -6267,6 +6792,31 @@ function M.follow_user(req)
   local count_row = db.fetchone("SELECT COUNT(*) AS n FROM user_follows WHERE followed_id=%s", tostring(followed_id))
   if following then create_notification(followed_id, user.id, "follow") end
   return 200, { followed_id = followed_id, following = following, follower_count = db.toint(count_row and count_row.n, 0) }
+end
+
+-- PATCH /api/users/:user_id/follow-mute { muted: bool } -- per-follow
+-- notification muting, 2026-10-11 (see M.upload_media's finalize_upload --
+-- the followers SELECT there is the thing this actually gates). Staying
+-- followed but muted is deliberately a distinct state from unfollowing:
+-- the viewer still sees this account in their following feed/list, they
+-- just stop getting a "new_upload" notification for every post.
+function M.set_follow_mute(req)
+  local user, auth, status, body = current_user(req)
+  if not user then return status, body end
+  local followed_id = tonumber(req.params.user_id)
+  if not followed_id then return 404, { detail = "User not found." } end
+  local payload = json_body(req)
+  local muted = db.tobool(payload.muted)
+  local existing = db.fetchone(
+    "SELECT follower_id FROM user_follows WHERE follower_id=%s AND followed_id=%s",
+    tostring(user.id), tostring(followed_id)
+  )
+  if not existing then return 404, { detail = "You are not following this user." } end
+  db.execute(
+    "UPDATE user_follows SET notifications_muted=%s WHERE follower_id=%s AND followed_id=%s",
+    muted, tostring(user.id), tostring(followed_id)
+  )
+  return 200, { followed_id = followed_id, notifications_muted = muted }
 end
 
 function M.send_friend_request(req)
@@ -6935,8 +7485,23 @@ local function storage_by_user(limit)
   }
 end
 
+-- Hardened 2026-10-11 while adding M.start_cache_orphan_sweep (below):
+-- db.lua's M.fetchall ALWAYS returns a table as its first value, even on a
+-- genuine SQL/connection failure (see its own definition) -- the original
+-- `local rows = db.fetchall(...)` here silently got `{}` on any such
+-- failure, with every caller then treating "no rows came back" as "no
+-- media exists," i.e. everything looks orphaned. M.admin_purge_storage_
+-- orphans (admin-triggered, a human watches the result) tolerated that
+-- latent risk acceptably; M.start_cache_orphan_sweep does NOT -- it is
+-- unattended and runs every 6 hours, so the exact same transient blip
+-- would have it conclude nothing is referenced and treat the ENTIRE
+-- cache as purgeable. Raising on a real error instead means the pcall
+-- wrapping that sweep's own sweep_once skips the whole pass rather than
+-- deleting anything, same fail-safe direction as every other sweep in
+-- this file.
 local function referenced_media_ids()
-  local rows = db.fetchall("SELECT id FROM media_items WHERE deleted_at IS NULL")
+  local rows, err = db.fetchall("SELECT id FROM media_items WHERE deleted_at IS NULL")
+  if err then error(err) end
   local set = {}
   for _, row in ipairs(rows) do set[tostring(db.toint(row.id, row.id))] = true end
   return set
@@ -7218,6 +7783,40 @@ local function walk_cache_dir(uploads_dir, referenced_ids)
   }
 end
 
+-- Admin side of the public status page (M.public_status, above): create/
+-- resolve the human-curated incidents it displays. Site-owner-only, same
+-- guard as every other admin_* route in this section.
+function M.admin_create_incident(req)
+  local owner, status, body = require_site_owner(req)
+  if not owner then return status, body end
+  local payload = json_body(req)
+  local title = trim(nn(payload.title) or ""):sub(1, 200)
+  if title == "" then return 400, { detail = "Title is required." } end
+  local description = nn(payload.description) and tostring(payload.description):sub(1, 2000) or nil
+  local severity = (nn(payload.severity) or "minor"):lower()
+  if severity ~= "minor" and severity ~= "major" and severity ~= "critical" then severity = "minor" end
+
+  local row, err = db.fetchone(
+    "INSERT INTO status_incidents (title, description, severity, created_by) VALUES (%s, %s, %s, %s) RETURNING id",
+    title, description, severity, tostring(owner.id)
+  )
+  if not row then return 500, { detail = "Could not create incident: " .. tostring(err) } end
+  write_audit_log(owner.id, "incident_create", "status_incidents", db.toint(row.id, row.id), title)
+  return 200, { id = db.toint(row.id, row.id), title = title, severity = severity }
+end
+
+function M.admin_resolve_incident(req)
+  local owner, status, body = require_site_owner(req)
+  if not owner then return status, body end
+  local incident_id = tonumber(req.params.incident_id)
+  if not incident_id then return 404, { detail = "Incident not found." } end
+  local existing = db.fetchone("SELECT id FROM status_incidents WHERE id=%s", tostring(incident_id))
+  if not existing then return 404, { detail = "Incident not found." } end
+  db.execute("UPDATE status_incidents SET resolved_at=now() WHERE id=%s", tostring(incident_id))
+  write_audit_log(owner.id, "incident_resolve", "status_incidents", incident_id, nil)
+  return 200, { id = incident_id, resolved = true }
+end
+
 function M.admin_storage(req)
   local owner, status, body = require_site_owner(req)
   if not owner then return status, body end
@@ -7247,6 +7846,94 @@ function M.admin_purge_storage_orphans(req)
   end
   write_audit_log(owner.id, "storage_purge_orphans", "storage", nil, string.format("removed=%d bytes=%d", removed, freed_bytes))
   return 200, { removed = removed, freed_bytes = freed_bytes }
+end
+
+-- ---------------------------------------------------------------------------
+-- Site-wide tag rename/merge. New feature, 2026-10-11: M.bulk_edit_media's
+-- `add_tag` patch only ever touches an explicit, caller-supplied `ids`
+-- array (capped at 200) -- there was no way to say "every post tagged X,
+-- wherever it is, rename/merge that tag" without paging through the whole
+-- library client-side first. Also covers pure deletion (an empty/omitted
+-- `to` tag strips the tag from every post that has it) since that's the
+-- same jsonb rewrite with one fewer branch.
+--
+-- Single batched UPDATE, not a SELECT-then-loop-N-single-row-UPDATEs --
+-- the same philosophy every other bulk operation in this file uses
+-- (bulk_edit_media itself included): let Postgres do the row-rewriting
+-- work in one statement rather than paying a round trip per affected post.
+-- `tags::jsonb ? %s` in the WHERE clause (the same `?`/`?|`/`?&` family
+-- TODO.md's boolean-tag-search feature already uses) narrows the UPDATE to
+-- exactly the rows that contain the tag, via the existing GIN index on
+-- tags::jsonb -- it does not need a sequential scan of the whole table.
+--
+-- `array_agg(DISTINCT elem)` after the per-element CASE/filter is what
+-- gives this MERGE semantics rather than plain rename: if a post already
+-- carries both "catt" (a typo) and "cat", renaming "catt"->"cat" would
+-- otherwise produce a tag array with "cat" listed twice; DISTINCT collapses
+-- that back to one, so renaming into an already-present tag is safe to
+-- call without checking for collisions first.
+-- GET /api/admin/tags/:tag/usage -- preview count before committing to a
+-- rename/merge/delete below. Cheap (same GIN-indexed `?` lookup the UPDATE
+-- itself uses, just COUNT instead of rewrite) -- meant to be called from
+-- the admin UI's confirmation step, not a heavy report.
+function M.admin_tag_usage(req)
+  local owner, status, body = require_site_owner(req)
+  if not owner then return status, body end
+  local tag = normalize_upload_tag(req.params.tag)
+  if tag == "" then return 400, { detail = "Invalid tag." } end
+  local row, err = db.fetchone(
+    "SELECT COUNT(*) AS n FROM media_items WHERE deleted_at IS NULL AND tags IS NOT NULL AND tags::jsonb ? %s",
+    tag
+  )
+  if err then return 500, { detail = "Query failed: " .. tostring(err) } end
+  return 200, { tag = tag, count = db.toint(row and row.n, 0) }
+end
+
+-- POST /api/admin/tags/rename { from, to } -- `to` omitted/empty deletes
+-- `from` everywhere instead of renaming it.
+-- Nested INSIDE M.admin_rename_tag below (not a top-level local), same
+-- 200-local-ceiling reason as every other such helper in this file.
+function M.admin_rename_tag(req)
+  local owner, status, body = require_site_owner(req)
+  if not owner then return status, body end
+  local payload = json_body(req)
+  local from_tag = normalize_upload_tag(payload.from)
+  local to_tag = normalize_upload_tag(payload.to or "")
+  if from_tag == "" then return 400, { detail = "`from` tag is required." } end
+  if from_tag == to_tag then return 400, { detail = "`to` must differ from `from` (or be omitted to delete)." } end
+
+  local function tag_jsonb_rewrite_sql(drop_only)
+    return string.format(
+      [[
+        UPDATE media_items
+        SET tags = (
+          SELECT COALESCE(to_jsonb(array_agg(DISTINCT elem)), '[]'::jsonb)::text
+          FROM (
+            SELECT %s AS elem
+            FROM jsonb_array_elements_text(tags::jsonb) AS elem
+          ) sub
+          WHERE elem IS NOT NULL
+        ), updated_at = now()
+        WHERE deleted_at IS NULL AND tags IS NOT NULL AND tags::jsonb ? %%s
+        RETURNING id
+      ]],
+      drop_only and "CASE WHEN elem = %s THEN NULL ELSE elem END" or "CASE WHEN elem = %s THEN %s ELSE elem END"
+    )
+  end
+
+  local drop_only = to_tag == ""
+  local sql = tag_jsonb_rewrite_sql(drop_only)
+  local rows, err
+  if drop_only then
+    rows, err = db.fetchall(sql, from_tag, from_tag)
+  else
+    rows, err = db.fetchall(sql, from_tag, to_tag, from_tag)
+  end
+  if err then return 500, { detail = "Query failed: " .. tostring(err) } end
+
+  write_audit_log(owner.id, drop_only and "tag_delete" or "tag_rename", "media_items", nil,
+    string.format("from=%s to=%s affected=%d", from_tag, drop_only and "(deleted)" or to_tag, #rows))
+  return 200, { from = from_tag, to = drop_only and cjson.null or to_tag, affected = #rows }
 end
 
 local SITE_SETTINGS_FIELDS = {
@@ -7899,6 +8586,148 @@ local function apply_image_watermark_if_configured(media_id, item, content, mime
   return content
 end
 
+-- Deliberately a bare global, not `local function` -- M.upload_media's
+-- finalize_upload (much earlier in this file) calls this, and Lua locals
+-- are only visible from their declaration point onward in source order, so
+-- a caller positioned earlier in the chunk can't see a later `local
+-- function` no matter when it actually runs. Same forward-reference
+-- problem (and the same fix) as acquire_transcode_slot/
+-- fast_start_remux_if_needed elsewhere in this file -- also frees one slot
+-- against this file's 200-top-level-local ceiling instead of costing one.
+--
+-- Pre-renders a freshly uploaded video's default grid-width (520px)
+-- thumbnail right after upload instead of waiting for the first viewer to
+-- hit M.serve_media_thumb's cache-miss path below. Confirmed live
+-- 2026-10-11 auditing media loading: the FIRST person to ever see a given
+-- video's thumbnail is normally the uploader themselves, on their own
+-- profile/feed, moments after uploading -- previously always the
+-- placeholder SVG, even though the real render was already launching in
+-- the background by then anyway. Shifting that same render earlier (upload
+-- time instead of first-view time) means it's simply done by the time
+-- anyone looks.
+--
+-- Deliberately reuses M.serve_media_thumb's exact cache path, .pending
+-- marker convention, and acquire_transcode_slot concurrency cap rather
+-- than inventing a second mechanism -- a viewer's request a moment later
+-- just finds the cache file (or an in-flight marker) already there, same
+-- as it always has. Called via copas.addthread from M.upload_media's
+-- finalize_upload (fire-and-forget, same contract as notify_discord_upload
+-- -- a busy transcode cap or a render failure here must never surface to
+-- the uploader; the existing lazy on-demand path remains the fallback
+-- exactly as it already was before this existed).
+prewarm_video_thumb = function(media_id, item)
+  local ok, err = pcall(function()
+    local width = 520
+    local shard = string.format("%02x", media_id % 256)
+    local cache_path = M.settings.uploads_dir .. "/_thumb_cache/" .. shard .. "/" .. media_id .. "_" .. width .. ".webp"
+    local cache_dir = cache_path:match("^(.*)/[^/]+$")
+    os.execute("mkdir -p " .. shell_quote(cache_dir))
+
+    -- Mirrors M.serve_media_thumb's claim_thumb_job/cache-hit checks: bail
+    -- quietly if a render is already in flight (shouldn't happen this soon
+    -- after upload, but costs nothing to check) or somehow already cached.
+    local existing_marker = io.open(cache_path .. ".pending", "rb")
+    if existing_marker then existing_marker:close() return end
+    local cf = io.open(cache_path, "rb")
+    if cf then cf:close() return end
+
+    local slot_path = acquire_transcode_slot()
+    if not slot_path then return end -- box busy right now; the lazy path still covers this video
+
+    local marker = cache_path .. ".pending"
+    local out = io.open(marker, "wb")
+    if out then out:write(tostring(os.time())); out:close() end
+
+    local content = resolve_media_bytes(item)
+    if not content then
+      os.remove(marker)
+      os.execute("rm -f " .. shell_quote(slot_path))
+      return
+    end
+    local src_path = original_bytes_cache_path(media_id, item)
+    local tmp_dst = cache_path .. ".tmp.webp"
+    local render_cmd = media_files.render_webp_scene_aware_cmd(src_path, tmp_dst, width, 84, 0.35)
+    os.execute(string.format(
+      "( %s; if [ -s %s ]; then mv -f %s %s; fi; rm -f %s %s ) >/dev/null 2>&1 &",
+      render_cmd, shell_quote(tmp_dst), shell_quote(tmp_dst), shell_quote(cache_path), shell_quote(marker), shell_quote(slot_path)
+    ))
+  end)
+  if not ok then
+    print("[nyxframe] prewarm_video_thumb error (media " .. tostring(media_id) .. "): " .. tostring(err))
+  end
+end
+
+-- One-shot startup backfill, 2026-10-11: prewarm_video_thumb only ever
+-- covers videos uploaded AFTER it existed -- every video uploaded earlier
+-- still takes the old lazy path, i.e. sits unthumbnailed until a viewer's
+-- GET .../thumb happens to miss. The live incident that prompted this
+-- (both workers stalling 20-100s on trivial endpoints) was exactly a
+-- viewer scrolling into a run of those pre-existing, never-thumbnailed
+-- videos at once -- a burst of cache misses each paying resolve_media_bytes'
+-- full blocking blob-fetch cost back to back. serve_media_thumb's miss path
+-- is now backgrounded (see its video branch above) so a live miss burst no
+-- longer stalls the RESPONSE, but the backlog of never-viewed videos is
+-- still sitting there waiting to cause the next burst whenever someone
+-- scrolls into them. This walks that backlog itself, one video at a time
+-- with a deliberate gap between each (THUMB_BACKFILL_DELAY_SECONDS) so the
+-- backfill never reintroduces the very burst pattern it exists to drain --
+-- a single resolve_media_bytes call every few seconds is a brief, isolated
+-- stall on whichever worker runs it, not a pile-up. Idempotent (skips
+-- anything already cached or already in flight via prewarm_video_thumb's
+-- own marker/cache checks) and safe to run on every startup: once the
+-- backlog is drained it just scans and finds nothing left to do.
+--
+-- No top-level `local` for the 4-second delay below -- routes.lua is
+-- already at LuaJIT's 200-local-per-chunk ceiling (see
+-- original_bytes_cache_path's neighboring comment), so this stays an
+-- inline literal instead of costing one more slot.
+function M.start_thumb_backfill_sweep()
+  local copas = require("copas")
+  copas.addthread(function()
+    local function thumb_cached(media_id)
+      local shard = string.format("%02x", media_id % 256)
+      local path = M.settings.uploads_dir .. "/_thumb_cache/" .. shard .. "/" .. media_id .. "_520.webp"
+      local f = io.open(path, "rb")
+      if f then f:close() return true end
+      return false
+    end
+
+    local rows, err = db.fetchall([[
+      SELECT id, updated_at, created_at, mime_type, original_filename, storage_path
+      FROM media_items
+      WHERE media_kind = 'video' AND deleted_at IS NULL
+      ORDER BY id
+    ]])
+    if err then
+      print("[nyxframe] thumb_backfill_sweep: could not list videos: " .. tostring(err))
+      return
+    end
+
+    local queued, skipped = 0, 0
+    for _, row in ipairs(rows) do
+      local media_id = db.toint(row.id, row.id)
+      if thumb_cached(media_id) then
+        skipped = skipped + 1
+      else
+        local item = {
+          id = media_id, updated_at = row.updated_at, created_at = row.created_at,
+          mime_type = row.mime_type, original_filename = row.original_filename, storage_path = row.storage_path,
+        }
+        local ok, perr = pcall(prewarm_video_thumb, media_id, item)
+        if not ok then
+          print("[nyxframe] thumb_backfill_sweep: prewarm failed for media " .. tostring(media_id) .. ": " .. tostring(perr))
+        end
+        queued = queued + 1
+        copas.sleep(4)
+      end
+    end
+    print(string.format(
+      "[nyxframe] thumb_backfill_sweep: done -- queued %d, already cached %d, total %d",
+      queued, skipped, #rows
+    ))
+  end)
+end
+
 function M.serve_media_thumb(req)
   -- Claims the right to launch a backgrounded thumbnail-render job: writes
   -- `marker_path` with the current epoch and returns true, unless a fresh
@@ -7975,9 +8804,35 @@ function M.serve_media_thumb(req)
     -- Must exist before claim_thumb_job's io.open(marker, "wb") below --
     -- a never-before-rendered shard directory doesn't exist yet, which
     -- would otherwise make the marker write fail, claim_thumb_job return
-    -- false, and the render job silently never launch at all.
+    -- false, and the render job silently never launch at all. Cheap
+    -- (mkdir -p on an existing dir is near-instant), unlike the blob fetch
+    -- below, so this alone stays inline.
     os.execute("mkdir -p " .. shell_quote(cache_dir))
-    if claim_thumb_job(marker) then
+    -- Everything past this point used to run inline here, including
+    -- resolve_media_bytes(item) -- which for a never-before-viewed video
+    -- means pulling the full original (DB blob or disk file, easily
+    -- hundreds of MB) into memory and persisting it to the original-bytes
+    -- cache. That's pure I/O/memory work, not spawned-and-detached like
+    -- the ffmpeg call beneath it, so it was blocking copas' single event
+    -- loop for this ENTIRE worker for however long that fetch took --
+    -- seconds normally, tens of seconds whenever the box is under memory
+    -- pressure (see 2026-10-11's RAM audit: this box runs at ~98% RAM
+    -- committed against 7GB total even right after boot). A gallery grid
+    -- with a cluster of never-cached videos fired this inline on every one
+    -- of them in a burst, and each blocked EVERY other request on that
+    -- worker -- not just other thumbs, /api/me and /api/health too --
+    -- which is exactly the symmetric 20-100s stalls across unrelated
+    -- endpoints seen in both workers' access logs that afternoon. Moving
+    -- the whole claim+slot+fetch+render sequence into a copas.addthread
+    -- (same mechanism prewarm_video_thumb above already uses for the
+    -- upload-time case) means this handler now does nothing but schedule
+    -- the work and return the placeholder immediately, same as the
+    -- already-backgrounded ffmpeg step. claim_thumb_job's own marker check
+    -- still makes concurrent requests for the same video safe -- it just
+    -- runs a tick later now instead of synchronously.
+    local copas = require("copas")
+    copas.addthread(function()
+      if not claim_thumb_job(marker) then return end
       -- Draws from the SAME global ffmpeg concurrency cap video transcoding
       -- uses (acquire_transcode_slot/transcode.max_concurrent, benchmarked
       -- against this box's actual hardware -- see that table's header
@@ -7994,7 +8849,7 @@ function M.serve_media_thumb(req)
         if content then
           local src_path = original_bytes_cache_path(media_id, item)
           local tmp_dst = cache_path .. ".tmp.webp"
-          local render_cmd = media_files.render_webp_cmd(src_path, tmp_dst, width, 84, 0.35)
+          local render_cmd = media_files.render_webp_scene_aware_cmd(src_path, tmp_dst, width, 84, 0.35)
           os.execute(string.format(
             "( %s; if [ -s %s ]; then mv -f %s %s; fi; rm -f %s %s ) >/dev/null 2>&1 &",
             render_cmd, shell_quote(tmp_dst), shell_quote(tmp_dst), shell_quote(cache_path), shell_quote(marker), shell_quote(slot_path)
@@ -8012,7 +8867,7 @@ function M.serve_media_thumb(req)
         -- philosophy the transcode cap itself already uses.
         os.remove(marker)
       end
-    end
+    end)
     local svg = media_files.video_placeholder_svg(width)
     -- Short, non-immutable cache: unlike the permanent "couldn't render"
     -- case this used to be the only user of, this placeholder can also mean
@@ -10876,6 +11731,78 @@ end
 -- confirmed live, adding this as two more top-level locals broke
 -- `luajit -e "loadfile(...)"` with the exact "more than 200 local
 -- variables" error the range_io comment already warns about.
+-- ---------------------------------------------------------------------------
+-- Ephemeral/"stories" post expiry sweep. New feature, 2026-10-11, paired
+-- with finalize_upload's `expires_in_hours` option above.
+--
+-- Deliberately reuses the EXISTING soft-delete mechanism (same
+-- deleted_at=now(), visibility='private' pair perform_delete_media already
+-- applies) rather than adding a new `expires_at > now()` condition to
+-- every browsing query in this file (list_media, fetch_media_feed,
+-- fetch_media_by_id, leaderboard, feed_signal, suggested_users,
+-- continue_watching, and more). That would mean finding and correctly
+-- updating every one of those WHERE clauses, with a real risk of missing
+-- one -- a scattered, easy-to-regress change versus a single sweep that
+-- flips the one flag every one of those queries already filters on.
+-- Reusing soft-delete also means an expired story automatically inherits
+-- the FULL existing lifecycle for free: it's recoverable via
+-- M.restore_media until the retention window (M.start_deleted_media_purge,
+-- above) closes, then hard-deleted exactly like any other deleted post --
+-- no separate cleanup path needed for ephemeral content specifically.
+--
+-- Short interval (contrast the 6-hour cache-orphan sweep or the daily
+-- deleted-media purge): stories are meant to disappear close to on time,
+-- not hours late. Still cheap -- indexed on expires_at (partial index,
+-- WHERE expires_at IS NOT NULL -- see pg_add_media_expiry.sql), so this is
+-- a tiny index scan against however many ephemeral posts are currently
+-- pending, not a sequential scan of the whole table.
+function M.start_media_expiry_sweep()
+  local copas = require("copas")
+  local SWEEP_INTERVAL_SECONDS = 5 * 60
+
+  local function sweep_once()
+    local rows, err = db.fetchall(
+      [[
+        UPDATE media_items
+        SET deleted_at=now(), visibility='private'
+        WHERE expires_at IS NOT NULL AND expires_at <= now() AND deleted_at IS NULL
+        RETURNING id
+      ]]
+    )
+    -- NOT `rows and #rows or 0`, and NOT `if not rows then ...` either --
+    -- db.lua's M.fetchall ALWAYS returns a table as its first value (`rows
+    -- or {}`, see its own definition), even on a real SQL failure; the
+    -- error only ever shows up in the second return value. Checking
+    -- `rows`'s truthiness therefore can never detect a failure -- `err`
+    -- is the only signal. Confirmed live 2026-10-11: got this wrong twice
+    -- in a row before catching it (first with `rows and #rows or 0`, then
+    -- with an equally-wrong `if not rows`), pre-migration, against a table
+    -- that didn't have expires_at yet -- both versions silently returned
+    -- "0 expired" with zero telemetry rows, zero log lines, nothing to
+    -- indicate anything had gone wrong at all.
+    if err then error(err) end
+    return #rows
+  end
+
+  copas.addthread(function()
+    while true do
+      local telemetry_t0 = M.telemetry.now()
+      local ok, removed_or_err = pcall(sweep_once)
+      local telemetry_ms = M.telemetry.ms_since(telemetry_t0)
+      if not ok then
+        print("[nyxframe] media expiry sweep error: " .. tostring(removed_or_err))
+        M.telemetry.job_result("media_expiry_sweep", false, telemetry_ms, { error = tostring(removed_or_err):sub(1, 300) })
+      elseif removed_or_err and removed_or_err > 0 then
+        print(string.format("[nyxframe] media expiry sweep: expired %d post(s)", removed_or_err))
+        M.telemetry.job_result("media_expiry_sweep", true, telemetry_ms, { expired = removed_or_err })
+      else
+        M.telemetry.job_result("media_expiry_sweep", true, telemetry_ms, nil)
+      end
+      copas.sleep(SWEEP_INTERVAL_SECONDS)
+    end
+  end)
+end
+
 function M.start_deleted_media_purge()
   local copas = require("copas")
   local SWEEP_INTERVAL_SECONDS = 6 * 3600
@@ -10935,6 +11862,185 @@ function M.start_deleted_media_purge()
           { removed_rows = removed_rows, removed_files = removed_files, freed_bytes = freed_bytes })
       else
         M.telemetry.job_result("deleted_media_purge", true, telemetry_ms, nil)
+      end
+      copas.sleep(SWEEP_INTERVAL_SECONDS)
+    end
+  end)
+end
+
+-- ---------------------------------------------------------------------------
+-- Automatic cache-orphan sweep for the three content-digest-keyed caches
+-- (_video_cache, _original_cache, _hls_cache). Confirmed live 2026-10-11
+-- while auditing disk usage: unlike the stale-PENDING sweep above (only
+-- catches a crashed encode's OWN in-flight leftovers) or
+-- M.start_deleted_media_purge above (only ever removes the raw uploaded
+-- original, and only for media whose row no longer exists), nothing
+-- automatic -- or even admin-manual -- ever reclaims a FINISHED rendition
+-- that a content change superseded. Re-uploading/editing a still-live
+-- media_items row changes content_sha256 (or, for _original_cache,
+-- updated_at), which changes that cache's digest key (see
+-- media_content_digest_seed/hls_variant_dir/original_bytes_cache_path), but
+-- the OLD key's file/directory is simply never looked at again -- it isn't
+-- "orphaned" by admin_purge_storage_orphans' definition (the media_id is
+-- still referenced), so it sits there forever.
+--
+-- Found live: media 621 carries two complete 1080p directories AND two
+-- complete "original" directories under _hls_cache for two different keys
+-- (one clearly superseded), same pattern on media 639; _hls_cache alone was
+-- 40GB with literally no cleanup path, manual or automatic -- unlike
+-- _video_cache/_original_cache/_watermark_cache/_thumb_cache,
+-- admin_purge_storage_orphans' ORPHAN_CACHE_DIR_NAMES never included it at
+-- all. This sweep is deliberately separate from that admin tool (not a
+-- rewrite of it) rather than risk its existing flat-file-only walk: it adds
+-- the other failure mode a digest key can hit -- "the media_id is still
+-- referenced, but this isn't its CURRENT key" -- on top of the existing
+-- "media_id isn't referenced at all" case, for all three key-addressed
+-- caches, _hls_cache (directory-per-variant) included.
+--
+-- Deliberately excludes _thumb_cache (not digest-keyed -- same path for a
+-- given media_id+width gets overwritten in place, nothing to supersede) and
+-- _watermark_cache (small, already reachable via the existing admin tool).
+--
+-- Far less frequent than the stale-pending sweep: a superseded-but-complete
+-- entry never un-supersedes itself, so there's no urgency, just steady
+-- reclamation. Same primary-worker-only gate as every other background loop
+-- in this file -- every worker shares the same on-disk cache.
+-- Nested INSIDE M.start_cache_orphan_sweep below (not a top-level local),
+-- same reason as every other helper in this file that is -- the main chunk
+-- is already at LuaJIT's 200-local ceiling; confirmed live, adding this as
+-- its own top-level local broke `luajit -e "loadfile(...)"` with the exact
+-- "more than 200 local variables" error range_io's comment already warns
+-- about.
+function M.start_cache_orphan_sweep()
+  local copas = require("copas")
+  local SWEEP_INTERVAL_SECONDS = 6 * 3600
+  -- Same margin as the manual orphan-purge path -- never touches anything
+  -- that could plausibly still be an in-flight job for a brand new key.
+  local MIN_AGE_SECONDS = 24 * 3600
+
+  local function current_media_digest_keys()
+    local sodium = require("luasodium")
+    -- Check `err`, not `rows` -- see referenced_media_ids' header comment
+    -- (above M.admin_purge_storage_orphans) for why db.fetchall's first
+    -- return value can never be used to detect a failure.
+    local rows, err = db.fetchall("SELECT id, content_sha256, updated_at, created_at FROM media_items WHERE deleted_at IS NULL")
+    if err then error(err) end
+    local transcode_keys, original_keys = {}, {}
+    for _, row in ipairs(rows) do
+      local media_id = tostring(db.toint(row.id, row.id))
+      local transcode_seed = media_content_digest_seed(media_id, row, nil)
+      transcode_keys[media_id] = sodium.sodium_bin2hex(sodium.crypto_hash_sha256(tostring(transcode_seed))):sub(1, 16)
+      local original_seed = tostring(row.updated_at or row.created_at or media_id)
+      original_keys[media_id] = sodium.sodium_bin2hex(sodium.crypto_hash_sha256(original_seed)):sub(1, 16)
+    end
+    return transcode_keys, original_keys
+  end
+
+  -- "<id>_<quality>_<key>" (directories, _hls_cache) or "<id>_<quality>_
+  -- <key>.mp4" (_video_cache) -- quality is alnum, key is hex.
+  local function parse_quality_style(name)
+    local stem = name:match("^(.-)%.[^./]+$") or name
+    return stem:match("^(%d+)_%w+_(%x+)$")
+  end
+
+  -- "<id>_<key>.bin" (_original_cache, one shard dir at a time).
+  local function parse_flat_style(name)
+    local stem = name:match("^(.-)%.[^./]+$") or name
+    return stem:match("^(%d+)_(%x+)$")
+  end
+
+  -- `find_type` is "-type f" or "-type d" (the latter for _hls_cache, where
+  -- the variant directory itself is the orphan unit). Size of a directory
+  -- is measured with `du -sb` since `find -printf %s` on a directory only
+  -- reports the directory inode's own size, not its contents.
+  local function sweep_dir(dir, referenced, keys, now, find_type, parse_name, is_dir)
+    local removed, freed = 0, 0
+    local handle = io.popen(string.format(
+      "find %s -mindepth 1 -maxdepth 1 %s -printf '%%T@ %%p\\n' 2>/dev/null",
+      shell_quote(dir), find_type))
+    if not handle then return removed, freed end
+    for line in handle:lines() do
+      local mtime_str, path = line:match("^(%S+) (.+)$")
+      local mtime = tonumber(mtime_str)
+      local name = path and path:match("([^/]+)$")
+      -- NOT `name and parse_name(name)` -- Lua's `and` always truncates its
+      -- right operand to a single value, which would silently discard
+      -- parse_name's second return (`key`) on every call. Confirmed live
+      -- 2026-10-11: that exact bug shipped in this function's first deploy
+      -- and made every pass a true no-op (key always nil, so the purgeable
+      -- check below could never pass) with no error and nothing in the
+      -- logs -- caught by manually re-running this logic against the real
+      -- DB/filesystem after a first pass reclaimed 0 bytes when ~33GB was
+      -- expected.
+      local media_id, key = parse_name(name or "")
+      if media_id and key and mtime and (now - mtime) > MIN_AGE_SECONDS then
+        local current_key = keys[media_id]
+        local purgeable = not referenced[media_id] or (current_key and key ~= current_key)
+        if purgeable then
+          local size = 0
+          if is_dir then
+            local du = io.popen(string.format("du -sb %s 2>/dev/null", shell_quote(path)))
+            if du then
+              size = tonumber((du:read("*l") or ""):match("^(%d+)")) or 0
+              du:close()
+            end
+            os.execute("rm -rf " .. shell_quote(path))
+          else
+            local f = io.open(path, "rb")
+            if f then size = f:seek("end") or 0; f:close() end
+            os.remove(path)
+          end
+          removed, freed = removed + 1, freed + size
+        end
+      end
+    end
+    handle:close()
+    return removed, freed
+  end
+
+  local function sweep_once()
+    local now = os.time()
+    local referenced = referenced_media_ids()
+    local transcode_keys, original_keys = current_media_digest_keys()
+    local removed, freed = 0, 0
+
+    local r, f = sweep_dir(M.settings.uploads_dir .. "/_video_cache", referenced, transcode_keys, now, "-type f", parse_quality_style, false)
+    removed, freed = removed + r, freed + f
+
+    r, f = sweep_dir(M.settings.uploads_dir .. "/_hls_cache", referenced, transcode_keys, now, "-type d", parse_quality_style, true)
+    removed, freed = removed + r, freed + f
+
+    -- _original_cache is sharded one level deep (_original_cache/<2-hex>/
+    -- <id>_<key>.bin, see original_bytes_cache_path) -- sweep each shard
+    -- directory present rather than assuming a fixed shard count/naming.
+    local shard_handle = io.popen(string.format(
+      "find %s -mindepth 1 -maxdepth 1 -type d -printf '%%p\\n' 2>/dev/null",
+      shell_quote(M.settings.uploads_dir .. "/_original_cache")))
+    if shard_handle then
+      for shard_dir in shard_handle:lines() do
+        r, f = sweep_dir(shard_dir, referenced, original_keys, now, "-type f", parse_flat_style, false)
+        removed, freed = removed + r, freed + f
+      end
+      shard_handle:close()
+    end
+
+    return removed, freed
+  end
+
+  copas.addthread(function()
+    while true do
+      local telemetry_t0 = M.telemetry.now()
+      local ok, removed_or_err, freed = pcall(sweep_once)
+      local telemetry_ms = M.telemetry.ms_since(telemetry_t0)
+      if not ok then
+        print("[nyxframe] cache orphan sweep error: " .. tostring(removed_or_err))
+        M.telemetry.job_result("cache_orphan_sweep", false, telemetry_ms, { error = tostring(removed_or_err):sub(1, 300) })
+      elseif removed_or_err and removed_or_err > 0 then
+        print(string.format("[nyxframe] cache orphan sweep: removed %d item(s), freed %d bytes", removed_or_err, freed or 0))
+        write_audit_log(nil, "cache_orphan_sweep", "storage", nil, string.format("removed=%d bytes=%d", removed_or_err, freed or 0))
+        M.telemetry.job_result("cache_orphan_sweep", true, telemetry_ms, { removed = removed_or_err, freed_bytes = freed or 0 })
+      else
+        M.telemetry.job_result("cache_orphan_sweep", true, telemetry_ms, nil)
       end
       copas.sleep(SWEEP_INTERVAL_SECONDS)
     end

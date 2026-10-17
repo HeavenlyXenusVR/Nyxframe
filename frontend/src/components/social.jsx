@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { Heart, LogIn, MessageCircle, ShieldOff, UserPlus, VolumeX } from "lucide-react";
+import { Bell, BellOff, Heart, LogIn, MessageCircle, ShieldOff, UserPlus, VolumeX } from "lucide-react";
 import { apiFetch, clearApiCache } from "../api.js";
 import { friendLabel } from "../utils/format.js";
 import { Avatar, EmptyState, PresencePill, UserMini } from "./ui.jsx";
@@ -32,6 +32,22 @@ export function ProfileActions({ ctx, user, onChanged }) {
     }
   }
 
+  // Per-follow notification mute, 2026-10-11 (see routes.lua's
+  // M.set_follow_mute) -- distinct from unfollowing: stays in the
+  // following list, just stops generating a notification per new upload.
+  async function toggleFollowMute() {
+    try {
+      await apiFetch(`/api/users/${user.id}/follow-mute`, {
+        method: "PATCH",
+        body: JSON.stringify({ muted: !user.follow_notifications_muted }),
+      });
+      clearApiCache("/api/users");
+      onChanged?.();
+    } catch (error) {
+      ctx.showToast(error.message, "error");
+    }
+  }
+
   async function block(kind) {
     const label = kind === "mute" ? "mute" : "block";
     if (!window.confirm(`Are you sure you want to ${label} @${user.username}?`)) return;
@@ -53,6 +69,12 @@ export function ProfileActions({ ctx, user, onChanged }) {
   return (
     <div className="profile-actions">
       <button type="button" onClick={follow}><Heart size={16} />{followed ? "Unfollow" : "Follow"}</button>
+      {followed ? (
+        <button type="button" title={user.follow_notifications_muted ? "Unmute notifications" : "Mute notifications"} onClick={toggleFollowMute}>
+          {user.follow_notifications_muted ? <BellOff size={16} /> : <Bell size={16} />}
+          {user.follow_notifications_muted ? "Unmute" : "Mute"}
+        </button>
+      ) : null}
       <button type="button" onClick={friend} disabled={["friends", "pending_out", "self"].includes(user.friend_status)}><UserPlus size={16} />{friendLabel(user.friend_status)}</button>
       {user.friend_status !== "self" ? <Link className="button-link" to="/messages" state={{ user }}><MessageCircle size={16} />Message</Link> : null}
       {user.friend_status !== "self" ? <button type="button" title="Mute" onClick={() => block("mute")}><VolumeX size={16} />Mute</button> : null}

@@ -8579,3 +8579,130 @@ select option {
     contain-intrinsic-size: auto 220px;
   }
 }
+
+/* ── Admin tag-tools / incident form row ──────────────────────────────── */
+.form-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+}
+@media (max-width: 640px) {
+  .form-row { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ── Continue Watching rail ───────────────────────────────────────────── */
+.continue-watching-card { position: relative; }
+.continue-watching-progress {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 4px;
+  background: rgba(0, 0, 0, 0.4);
+}
+.continue-watching-progress span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+/* ── Status page ──────────────────────────────────────────────────────── */
+.status-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  font-weight: 600;
+  margin-bottom: 18px;
+}
+.status-banner.status-ok {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  border-color: color-mix(in srgb, var(--ok) 36%, var(--line));
+}
+.status-banner.status-down {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border-color: color-mix(in srgb, var(--danger) 36%, var(--line));
+}
+.incident-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.incident-card {
+  display: flex;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--panel);
+}
+.incident-card h3 { margin: 0 0 4px; font-size: 1rem; }
+.incident-card p { margin: 0 0 4px; color: var(--muted); }
+.incident-card.active { border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); }
+.incident-meta { color: var(--muted); font-size: 0.85rem; }
+.status-icon-critical { color: var(--danger); flex-shrink: 0; }
+.status-icon-major { color: var(--warn); flex-shrink: 0; }
+.status-icon-minor { color: var(--muted); flex-shrink: 0; }
+
+/* ── API docs page ────────────────────────────────────────────────────── */
+.code-block {
+  background: var(--glass-control);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  overflow-x: auto;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.api-endpoint-table {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.api-endpoint-row {
+  display: grid;
+  grid-template-columns: 60px minmax(0, 220px) minmax(0, 1fr);
+  gap: 12px;
+  align-items: baseline;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+}
+.api-endpoint-row code { font-size: 0.85rem; }
+.api-endpoint-desc { color: var(--muted); font-size: 0.9rem; }
+.api-method {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 6px;
+  text-align: center;
+  width: fit-content;
+}
+.api-method-get { color: var(--accent-2); background: color-mix(in srgb, var(--accent-2) 18%, transparent); }
+.api-method-post { color: var(--accent); background: color-mix(in srgb, var(--accent) 18%, transparent); }
+
+/* ── Year recap page ──────────────────────────────────────────────────── */
+.recap-top-post {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  color: inherit;
+  text-decoration: none;
+}
+.recap-top-post img {
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 12px;
+  flex-shrink: 0;
+}
+.recap-top-post h3 { margin: 0 0 4px; }
+.recap-top-post p { margin: 0; color: var(--muted); }
+
+@media (max-width: 640px) {
+  .api-endpoint-row { grid-template-columns: 1fr; gap: 4px; }
+}

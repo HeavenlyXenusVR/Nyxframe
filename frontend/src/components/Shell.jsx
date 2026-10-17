@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Link, NavLink, useLocation } from "react-router-dom";
-import { AlertTriangle, Folder, Grid3X3, Heart, Home, Image as ImageIcon, LogIn, LogOut, MessageCircle, Moon, MoreHorizontal, Rocket, Search as SearchIcon, Settings, ShieldAlert, Sparkles, Sun, SunMoon, TrendingUp, Upload, UserPlus, Users, X as XIcon } from "lucide-react";
+import { Activity, AlertTriangle, Code2, Folder, Gift, Grid3X3, Heart, Home, Image as ImageIcon, LogIn, LogOut, MessageCircle, Moon, MoreHorizontal, Rocket, Search as SearchIcon, Settings, ShieldAlert, Sparkles, Sun, SunMoon, TrendingUp, Upload, UserPlus, Users, Wand2, X as XIcon } from "lucide-react";
 import { apiFetch, cachedApiFetch } from "../api.js";
 import { useLiveRefresh } from "../hooks/useLiveRefresh.js";
 import { getPendingUploadJobs, removePendingUploadJob } from "../uploadJobs.js";
@@ -24,7 +24,9 @@ const NAV_ITEMS = [
   { to: "/collections", icon: Folder, label: "Collections" },
   { to: "/users", icon: Users, label: "Users" },
   { to: "/following", icon: Sparkles, label: "Following" },
+  { to: "/for-you", icon: Wand2, label: "For You", auth: true },
   { to: "/liked", icon: Heart, label: "Liked" },
+  { to: "/year-recap", icon: Gift, label: "Year in Review", auth: true },
   { to: "/friends", icon: UserPlus, label: "Friends", auth: true },
   { to: "/messages", icon: MessageCircle, label: "Messages", auth: true },
   { to: "/studio", icon: Grid3X3, label: "Studio", auth: true },
@@ -289,6 +291,8 @@ export function Shell({ ctx, children, className = "", style }) {
       <BackToTop />
       <footer className="site-footer">
         <span>Nyxframe // HeavenlyXenusVR</span>
+        <Link to="/status"><Activity size={14} />Status</Link>
+        <Link to="/api-docs"><Code2 size={14} />API</Link>
         <a href="https://discord.com/users/1304564041863266347" target="_blank" rel="noreferrer">Discord</a>
       </footer>
     </div>

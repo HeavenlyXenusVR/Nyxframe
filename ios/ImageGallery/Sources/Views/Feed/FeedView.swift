@@ -17,7 +17,12 @@ struct FeedView: View {
     @State private var railsReloadKey = 0
     @State private var isPickingRandom = false
     /// Drives navigation to the post GET /api/media/random picked --
-    /// mirrors web's "Surprise me" on DiscoverPage.jsx.
+    /// mirrors web's "Surprise me" on DiscoverPage.jsx. Two separate
+    /// `@State` (not `.navigationDestination(item:)`) since that overload
+    /// needs iOS 17 and this app's deployment target is 16 -- same
+    /// isPresented-plus-separately-stored-value pattern MediaDetailView
+    /// already uses for its "Open Original" in-app browser sheet.
+    @State private var showingRandom = false
     @State private var randomMedia: MediaItem?
 
     private var settings: UserSettings? { session.currentUser?.userSettings }

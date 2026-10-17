@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Ban, Bell, Check, Download, Eye, KeyRound, Mail, Palette, Save, ShieldCheck, Sparkles, Trash2, UserRound } from "lucide-react";
+import { Ban, Bell, BellOff, Check, Download, Eye, KeyRound, Mail, Palette, Save, ShieldCheck, Sparkles, Trash2, UserRound } from "lucide-react";
 import { apiFetch, apiFetchBlob, clearApiCache, downloadBlob } from "../api.js";
 import { Avatar, ChipRow, EmptyState, Page, RequireLogin, UserMini } from "../components/ui.jsx";
 import { profileClassName, profileStyle } from "../utils/appearance.js";
@@ -128,6 +128,20 @@ export function SettingsPage({ ctx }) {
     try {
       await apiFetch(`/api/saved-searches/${searchId}`, { method: "DELETE" });
       setSavedSearches((current) => current.filter((row) => Number(row.id) !== Number(searchId)));
+    } catch (error) {
+      ctx.showToast(error.message, "error");
+    }
+  }
+
+  async function toggleSavedSearchMute(searchId, muted) {
+    try {
+      await apiFetch(`/api/saved-searches/${searchId}/mute`, {
+        method: "PATCH",
+        body: JSON.stringify({ muted }),
+      });
+      setSavedSearches((current) => current.map((row) => (
+        Number(row.id) === Number(searchId) ? { ...row, notifications_muted: muted } : row
+      )));
     } catch (error) {
       ctx.showToast(error.message, "error");
     }
@@ -873,6 +887,14 @@ export function SettingsPage({ ctx }) {
                 {savedSearches.map((row) => (
                   <div className="friend-request" key={row.id}>
                     <span>{row.name}</span>
+                    <button
+                      type="button"
+                      className="icon-button"
+                      onClick={() => toggleSavedSearchMute(row.id, !row.notifications_muted)}
+                      title={row.notifications_muted ? "Unmute notifications" : "Mute notifications"}
+                    >
+                      {row.notifications_muted ? <BellOff size={16} /> : <Bell size={16} />}
+                    </button>
                     <button type="button" className="icon-button" onClick={() => deleteSavedSearch(row.id)} title="Delete"><Trash2 size={16} /></button>
                   </div>
                 ))}

@@ -21,8 +21,8 @@ export function FeedPage({ ctx, mode }) {
   const [hasNext, setHasNext] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const title = mode === "liked" ? "Liked" : "Following";
-  const endpoint = mode === "liked" ? "/api/me/likes" : "/api/feed/following";
+  const title = mode === "liked" ? "Liked" : mode === "for-you" ? "For You" : "Following";
+  const endpoint = mode === "liked" ? "/api/me/likes" : mode === "for-you" ? "/api/feed/for-you" : "/api/feed/following";
   const pageSize = pageSizeFor(ctx.settings);
 
   const userId = ctx.user?.id;
@@ -84,7 +84,12 @@ export function FeedPage({ ctx, mode }) {
     if (prev && prev.count === signal.count && prev.latest === signal.latest) return;
     await loadFeed({ background: true });
   }, [userId, mode, loadFeed]);
-  useLiveRefresh(checkFeedSignal, { enabled: Boolean(ctx.user) && page === 1, interval: 22_000 });
+  // /api/feed/signal only knows "liked"/"following" -- the for-you feed's
+  // ranking blends recency decay with engagement/tag signals that plain
+  // signal's COUNT+MAX(created_at) check can't represent cheaply, so this
+  // mode skips the live-poll optimization and just relies on the normal
+  // page-load fetch above plus whatever TTL cachedApiFetch already applies.
+  useLiveRefresh(checkFeedSignal, { enabled: Boolean(ctx.user) && page === 1 && mode !== "for-you", interval: 22_000 });
 
   if (!ctx.user) return <RequireLogin />;
 
@@ -108,7 +113,7 @@ export function FeedPage({ ctx, mode }) {
             action={<Link className="button-link primary" to="/">Browse Discover</Link>}
           />
       ) : (
-        <MediaGrid ctx={ctx} items={items} loading={loading} emptyTitle={mode === "liked" ? "No liked posts yet" : "No following posts yet"} onItemUpdated={handleItemUpdated} onOpen={ctx.openLightbox} />
+        <MediaGrid ctx={ctx} items={items} loading={loading} emptyTitle={mode === "liked" ? "No liked posts yet" : mode === "for-you" ? "Nothing to recommend yet" : "No following posts yet"} onItemUpdated={handleItemUpdated} onOpen={ctx.openLightbox} />
       )}
       <Pager page={page} hasNext={hasNext} loading={loading} onPage={setPage} />
     </Page>

@@ -23,8 +23,25 @@ export function UsersPage({ ctx }) {
   });
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [suggested, setSuggested] = useState([]);
 
   const showToast = ctx.showToast;
+
+  // Suggested accounts to follow, 2026-10-11 (see routes.lua's
+  // M.suggested_users) -- only shown above an EMPTY search, same spot a
+  // "browse" surface naturally lives, and only for a logged-in viewer
+  // since the ranking is personalized (follows you already have, tags
+  // you've liked). Silently empty on error/no signal rather than a toast
+  // -- this is a nice-to-have suggestion rail, not a page the visitor
+  // came here to load.
+  useEffect(() => {
+    if (!ctx.user) { setSuggested([]); return; }
+    let cancelled = false;
+    cachedApiFetch("/api/users/suggested?limit=8", { ttl: 60_000, staleTtl: 5 * 60_000 })
+      .then((data) => { if (!cancelled) setSuggested(data.users || []); })
+      .catch(() => { if (!cancelled) setSuggested([]); });
+    return () => { cancelled = true; };
+  }, [ctx.user]);
 
   const loadUsers = useCallback(async ({ background = false } = {}) => {
     if (!background) setLoading(true);
@@ -68,6 +85,22 @@ export function UsersPage({ ctx }) {
       <div className="toolbar">
         <div className="input-with-icon wide"><Search size={16} /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search users" /></div>
       </div>
+      {!query && suggested.length ? (
+        <div className="section-head"><h2>Suggested for you</h2></div>
+      ) : null}
+      {!query && suggested.length ? (
+        <div className="user-grid">
+          {suggested.map((user) => (
+            <UserCard
+              ctx={ctx}
+              user={user}
+              onChanged={() => setSuggested((rows) => rows.filter((row) => row.id !== user.id))}
+              key={user.id}
+            />
+          ))}
+        </div>
+      ) : null}
+      {!query && suggested.length ? <div className="section-head"><h2>All users</h2></div> : null}
       {loading ? <SkeletonGrid count={6} /> : (
         <div className="user-grid">
           {users.map((user) => <UserCard ctx={ctx} user={user} onChanged={() => loadUsers({ background: true })} key={user.id} />)}

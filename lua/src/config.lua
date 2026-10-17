@@ -182,6 +182,26 @@ function M.load()
     -- irreversible action, not just a CPU-cost one.
     deleted_media_retention_days = math.max(1, env_int("GALLERY_DELETED_MEDIA_RETENTION_DAYS", 10)),
     deleted_media_purge_enabled = env_bool("GALLERY_ENABLE_DELETED_MEDIA_PURGE", true),
+
+    -- routes.lua's M.start_cache_orphan_sweep: reclaims _video_cache/
+    -- _original_cache/_hls_cache entries left behind when a content change
+    -- (re-upload/edit) supersedes their digest key -- see that function's
+    -- header comment. Same kill-switch convention as every other
+    -- background loop above.
+    cache_orphan_sweep_enabled = env_bool("GALLERY_ENABLE_CACHE_ORPHAN_SWEEP", true),
+
+    -- routes.lua's M.start_media_expiry_sweep: auto-expires ephemeral/
+    -- "stories" posts (finalize_upload's `expires_in_hours` option) by
+    -- soft-deleting them once expires_at passes. Same kill-switch
+    -- convention as every other background loop above.
+    media_expiry_sweep_enabled = env_bool("GALLERY_ENABLE_MEDIA_EXPIRY_SWEEP", true),
+
+    -- routes.lua's M.start_thumb_backfill_sweep: one-shot startup walk that
+    -- prewarms thumbnails for videos uploaded before prewarm_video_thumb
+    -- existed, throttled to one every 4s so draining the backlog can't
+    -- itself reproduce the cache-miss-burst stall it exists to prevent.
+    -- Same kill-switch convention as every other background loop above.
+    thumb_backfill_sweep_enabled = env_bool("GALLERY_ENABLE_THUMB_BACKFILL_SWEEP", true),
   }
 end
 

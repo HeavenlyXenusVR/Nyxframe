@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { Eye, Flame, Heart, Lock, Sparkles } from "lucide-react";
+import { Clock, Eye, Flame, Heart, Lock, Sparkles } from "lucide-react";
 import { apiFetch, cachedApiFetch } from "../api.js";
 import { ResilientImage } from "./ui.jsx";
 import { mediaImageSources } from "../utils/media.js";
@@ -51,6 +51,55 @@ function MemoryCard({ item }) {
       <div className="trending-rail-copy">
         <strong>{item.title || "Untitled"}</strong>
         <span><Heart size={12} />{numberish(item.likes || item.like_count)}</span>
+      </div>
+    </Link>
+  );
+}
+
+// "Continue Watching" -- GET /api/me/continue-watching, new 2026-10-11 (see
+// routes.lua's M.continue_watching + the watch-progress sync in
+// utils/playerPrefs.js). Same self-contained shape as DiscoverMemories
+// above: own fetch, logged-in only, renders nothing when there's nothing
+// in progress.
+export function DiscoverContinueWatching({ ctx }) {
+  const [items, setItems] = useState(null);
+
+  useEffect(() => {
+    if (!ctx?.user) { setItems([]); return undefined; }
+    let cancelled = false;
+    apiFetch("/api/me/continue-watching?limit=10")
+      .then((data) => { if (!cancelled) setItems(data.media || []); })
+      .catch(() => { if (!cancelled) setItems([]); });
+    return () => { cancelled = true; };
+  }, [ctx?.user]);
+
+  if (!items || !items.length) return null;
+
+  return (
+    <section className="discover-memories">
+      <div className="discover-trending-head">
+        <h2><Clock size={18} />Continue Watching</h2>
+      </div>
+      <div className="trending-rail">
+        {items.map((item) => <ContinueWatchingCard key={item.id} item={item} />)}
+      </div>
+    </section>
+  );
+}
+
+function ContinueWatchingCard({ item }) {
+  const sources = mediaImageSources(item, { width: 360, previewSize: "card" });
+  const duration = Number(item.watch_duration_seconds);
+  const position = Number(item.watch_position_seconds);
+  const pct = Number.isFinite(duration) && duration > 0 && Number.isFinite(position)
+    ? Math.min(100, Math.max(0, (position / duration) * 100))
+    : 0;
+  return (
+    <Link className="trending-rail-card continue-watching-card" to={`/media/${item.id}`}>
+      <ResilientImage sources={sources} alt={item.title || ""} loading="lazy" decoding="async" fallback={<div className="video-thumb-placeholder" />} />
+      <div className="continue-watching-progress"><span style={{ width: `${pct}%` }} /></div>
+      <div className="trending-rail-copy">
+        <strong>{item.title || "Untitled"}</strong>
       </div>
     </Link>
   );

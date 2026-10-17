@@ -431,6 +431,43 @@ function M.render_webp_cmd(src_path, dst_path, max_edge, quality, seek)
   )
 end
 
+-- Picks a representative video thumbnail frame via ffmpeg's scene-change
+-- detector instead of always grabbing whatever happens to sit at a fixed
+-- 0.35s mark -- that fixed offset regularly lands on a black/fade-in frame
+-- right after a video starts (eyeballed across a sample of live
+-- thumbnails while auditing media loading, 2026-10-11).
+--
+-- Bounded to the first SCENE_SCAN_SECONDS of the source (an INPUT-side
+-- `-t`, not a full decode) so this stays a cheap optimization layered on
+-- top of the existing single-frame grab, not a second expensive pass over
+-- the whole video. If nothing clears the scene-change threshold in that
+-- window -- a static/talking-head clip, or a source shorter than the
+-- window -- ffmpeg's `select` filter emits zero frames and writes nothing,
+-- so `dst_path` stays empty/missing and the ORIGINAL fixed-seek command
+-- runs as a fallback. Chained into ONE shell command string (not two
+-- separate os.execute calls) so a caller running this inside a detached
+-- background job (see routes.lua's serve_media_thumb/prewarm_video_thumb)
+-- only has to wrap/clean up once, same convention render_webp_cmd's own
+-- callers already rely on.
+local SCENE_SCAN_SECONDS = 20
+local SCENE_THRESHOLD = 0.3
+
+function M.render_webp_scene_aware_cmd(src_path, dst_path, max_edge, quality, fallback_seek)
+  local scale_filter = string.format("scale='min(%d,iw)':-2:flags=lanczos", max_edge)
+  -- The comma inside `gt(scene\,N)` must be backslash-escaped -- ffmpeg's
+  -- filtergraph syntax otherwise reads it as the separator between this
+  -- filter and the chained `scale` filter that follows, not as part of
+  -- gt()'s argument list.
+  local scene_cmd = string.format(
+    "%s -y -hide_banner -loglevel error -i %s -t %d -vf %s -frames:v 1 -c:v libwebp -compression_level 5 -quality %d -f webp %s </dev/null >/dev/null 2>&1",
+    ffmpeg_prefix(), shell_quote(src_path), SCENE_SCAN_SECONDS,
+    shell_quote(string.format("select='gt(scene\\,%g)',%s", SCENE_THRESHOLD, scale_filter)),
+    math.floor(quality), shell_quote(dst_path)
+  )
+  local fallback_cmd = M.render_webp_cmd(src_path, dst_path, max_edge, quality, fallback_seek)
+  return string.format("%s; if [ ! -s %s ]; then %s; fi", scene_cmd, shell_quote(dst_path), fallback_cmd)
+end
+
 function M.render_webp(src_path, dst_path, max_edge, quality, seek)
   local tmp_dst = dst_path .. ".tmp.webp"
   local cmd = M.render_webp_cmd(src_path, tmp_dst, max_edge, quality, seek)

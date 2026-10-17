@@ -58,6 +58,9 @@ const StudioPage = lazyPage(() => import("./pages/StudioPage.jsx"), "StudioPage"
 const TrendingPage = lazyPage(() => import("./pages/TrendingPage.jsx"), "TrendingPage");
 const UploadPage = lazyPage(() => import("./pages/UploadPage.jsx"), "UploadPage");
 const UsersPage = lazyPage(() => import("./pages/UsersPage.jsx"), "UsersPage");
+const StatusPage = lazyPage(() => import("./pages/StatusPage.jsx"), "StatusPage");
+const ApiDocsPage = lazyPage(() => import("./pages/ApiDocsPage.jsx"), "ApiDocsPage");
+const YearRecapPage = lazyPage(() => import("./pages/YearRecapPage.jsx"), "YearRecapPage");
 const Lightbox = lazyPage(() => import("./components/Lightbox.jsx"), "Lightbox");
 
 // Warm the chunks people are most likely to open next once the app is idle,
@@ -504,6 +507,7 @@ function App() {
         <Route path="/category/:categoryId" element={<CategoryPage ctx={ctx} />} />
         <Route path="/following" element={<FeedPage ctx={ctx} mode="following" />} />
         <Route path="/liked" element={<FeedPage ctx={ctx} mode="liked" />} />
+        <Route path="/for-you" element={<FeedPage ctx={ctx} mode="for-you" />} />
         <Route path="/media/:mediaId" element={<MediaDetailPage ctx={ctx} />} />
         <Route path="/media/:mediaId/similar" element={<SimilarMediaPage ctx={ctx} />} />
         <Route path="/visual-search" element={<VisualSearchPage ctx={ctx} />} />
@@ -519,6 +523,9 @@ function App() {
         <Route path="/settings" element={<SettingsPage ctx={ctx} />} />
         <Route path="/admin" element={<AdminPage ctx={ctx} />} />
         <Route path="/other-projects" element={<OtherProjectsPage ctx={ctx} />} />
+        <Route path="/status" element={<StatusPage ctx={ctx} />} />
+        <Route path="/api-docs" element={<ApiDocsPage ctx={ctx} />} />
+        <Route path="/year-recap" element={<YearRecapPage ctx={ctx} />} />
         <Route path="/login" element={<AuthPage ctx={ctx} />} />
         <Route path="*" element={<NotFound />} />
       </Routes>

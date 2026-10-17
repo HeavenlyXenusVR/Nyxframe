@@ -87,6 +87,7 @@ end
 
 httpd.route("GET", "/api/health", routes.health)
 httpd.route("GET", "/api/live/checks", routes.live_checks)
+httpd.route("GET", "/api/status", routes.public_status)
 
 httpd.route("POST", "/api/auth/register", routes.register)
 httpd.route("POST", "/api/auth/login", routes.login)
@@ -94,11 +95,14 @@ httpd.route("POST", "/api/auth/2fa/verify", routes.verify_2fa)
 httpd.route("POST", "/api/auth/logout", routes.logout)
 httpd.route("GET", "/api/me", routes.me)
 httpd.route("GET", "/api/me/media", routes.my_media)
+httpd.route("GET", "/api/me/continue-watching", routes.continue_watching)
 httpd.route("GET", "/api/me/on-this-day", routes.on_this_day)
 httpd.route("GET", "/api/me/stats", routes.creator_stats)
+httpd.route("GET", "/api/me/year-recap", routes.year_recap)
 httpd.route("GET", "/api/me/likes", routes.feed_liked)
 httpd.route("GET", "/api/feed/following", routes.feed_following)
 httpd.route("GET", "/api/feed/signal", routes.feed_signal)
+httpd.route("GET", "/api/feed/for-you", routes.feed_for_you)
 httpd.route("PATCH", "/api/me/profile", routes.update_profile)
 httpd.route("PATCH", "/api/me/settings", routes.update_settings)
 httpd.route("POST", "/api/me/avatar", routes.update_avatar)
@@ -164,6 +168,8 @@ httpd.route("DELETE", "/api/comments/:comment_id", routes.delete_comment)
 httpd.route("POST", "/api/comments/:comment_id/react", routes.react_to_comment_route)
 
 httpd.route("GET", "/api/media/:media_id/thumb", routes.serve_media_thumb)
+httpd.route("GET", "/api/media/:media_id/watch-progress", routes.watch_progress)
+httpd.route("POST", "/api/media/:media_id/watch-progress", routes.save_watch_progress)
 httpd.route("GET", "/api/media/:media_id/file", routes.serve_media_file)
 httpd.route("GET", "/api/media/:media_id/preview", routes.serve_media_preview)
 httpd.route("GET", "/api/media/:media_id/hls/master.m3u8", routes.serve_hls_master)
@@ -205,10 +211,12 @@ httpd.route("GET", "/api/projects/nyxframe/download", routes.download_nyxframe)
 -- elsewhere in this file), and "/api/users/:username/profile" before the
 -- bare "/api/users/:username" for the same reason.
 httpd.route("GET", "/api/users/search", routes.search_users)
+httpd.route("GET", "/api/users/suggested", routes.suggested_users)
 httpd.route("POST", "/api/search/visual", routes.visual_search)
 httpd.route("GET", "/api/users/:username/profile", routes.profile_page)
 httpd.route("GET", "/api/users/:username", routes.public_profile)
 httpd.route("POST", "/api/users/:user_id/follow", routes.follow_user)
+httpd.route("PATCH", "/api/users/:user_id/follow-mute", routes.set_follow_mute)
 httpd.route("POST", "/api/users/:user_id/friend-request", routes.send_friend_request)
 httpd.route("GET", "/api/friends/requests", routes.friend_requests_list)
 httpd.route("POST", "/api/friends/requests/:request_id", routes.respond_friend_request)
@@ -259,6 +267,7 @@ httpd.route("POST", "/api/collections/:collection_id/items", routes.save_collect
 httpd.route("GET", "/api/saved-searches", routes.list_saved_searches)
 httpd.route("POST", "/api/saved-searches", routes.create_saved_search)
 httpd.route("DELETE", "/api/saved-searches/:search_id", routes.delete_saved_search)
+httpd.route("PATCH", "/api/saved-searches/:search_id/mute", routes.set_saved_search_mute)
 
 httpd.route("GET", "/api/stats", routes.admin_stats)
 httpd.route("GET", "/api/admin/telemetry", routes.admin_telemetry)
@@ -271,6 +280,10 @@ httpd.route("GET", "/api/admin/flagged-media", routes.admin_flagged_media)
 httpd.route("POST", "/api/admin/flagged-media/:media_id/resolve", routes.admin_resolve_flagged_media)
 httpd.route("GET", "/api/admin/storage", routes.admin_storage)
 httpd.route("POST", "/api/admin/storage/purge-orphans", routes.admin_purge_storage_orphans)
+httpd.route("POST", "/api/admin/incidents", routes.admin_create_incident)
+httpd.route("POST", "/api/admin/incidents/:incident_id/resolve", routes.admin_resolve_incident)
+httpd.route("GET", "/api/admin/tags/:tag/usage", routes.admin_tag_usage)
+httpd.route("POST", "/api/admin/tags/rename", routes.admin_rename_tag)
 httpd.route("PATCH", "/api/admin/site-settings", routes.admin_update_site_settings)
 
 -- Background music (see scripts/pg_add_background_music.sql). The two
@@ -432,6 +445,25 @@ if is_primary_worker then telemetry.start_pruner() end
 -- action (hard-deletes the row and its file), not just a CPU-cost one --
 -- settings.deleted_media_purge_enabled defaults to true (config.lua).
 if is_primary_worker and settings.deleted_media_purge_enabled then routes.start_deleted_media_purge() end
+
+-- Cache-orphan sweep for _video_cache/_original_cache/_hls_cache entries a
+-- content change superseded (see routes.lua's M.start_cache_orphan_sweep
+-- doc comment) -- found live 2026-10-11 reclaiming GBs from _hls_cache,
+-- which previously had no cleanup path of any kind. Same primary-worker
+-- gate and off-switch convention as every background loop above.
+if is_primary_worker and settings.cache_orphan_sweep_enabled then routes.start_cache_orphan_sweep() end
+
+-- Ephemeral/"stories" post expiry sweep (see routes.lua's
+-- M.start_media_expiry_sweep doc comment). Same primary-worker gate and
+-- off-switch convention as every background loop above.
+if is_primary_worker and settings.media_expiry_sweep_enabled then routes.start_media_expiry_sweep() end
+
+-- One-shot video-thumbnail backfill for uploads that predate
+-- prewarm_video_thumb (see routes.lua's M.start_thumb_backfill_sweep doc
+-- comment -- this is what drains the backlog that caused 2026-10-11's
+-- 20-100s request stalls). Same primary-worker gate and off-switch
+-- convention as every background loop above.
+if is_primary_worker and settings.thumb_backfill_sweep_enabled then routes.start_thumb_backfill_sweep() end
 
 httpd.listen(settings.host, settings.port)
 print(string.format("[nyxframe] listening on %s:%d", settings.host, settings.port))

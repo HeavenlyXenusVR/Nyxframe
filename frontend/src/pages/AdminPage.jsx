@@ -63,6 +63,7 @@ export function AdminPage({ ctx }) {
       {tab === "users" ? <UsersTab ctx={ctx} /> : null}
       {tab === "storage" ? <StorageTab ctx={ctx} /> : null}
       {tab === "site" ? <SiteSettingsTab ctx={ctx} /> : null}
+      {tab === "site" ? <IncidentsPanel ctx={ctx} /> : null}
       {tab === "music" ? <MusicTab ctx={ctx} /> : null}
       {tab === "audit" ? <AuditLogTab /> : null}
     </Page>
@@ -321,6 +322,10 @@ function StorageTab({ ctx }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [purging, setPurging] = useState(false);
+  const [fromTag, setFromTag] = useState("");
+  const [toTag, setToTag] = useState("");
+  const [tagUsage, setTagUsage] = useState(null);
+  const [tagBusy, setTagBusy] = useState(false);
   const showToast = ctx.showToast;
 
   const load = useCallback(async () => {
@@ -352,6 +357,49 @@ function StorageTab({ ctx }) {
     }
   }
 
+  // Site-wide tag rename/merge/delete, 2026-10-11 (see routes.lua's
+  // M.admin_tag_usage/M.admin_rename_tag) -- operates on EVERY post
+  // tagged `fromTag`, not an explicit selection, so the preview-count step
+  // before the confirm() is the only safety net on what's otherwise an
+  // irreversible bulk rewrite.
+  async function checkTagUsage() {
+    const tag = fromTag.trim();
+    if (!tag) return;
+    setTagBusy(true);
+    try {
+      const result = await apiFetch(`/api/admin/tags/${encodeURIComponent(tag)}/usage`);
+      setTagUsage(result);
+    } catch (error) {
+      showToast(error.message, "error");
+    } finally {
+      setTagBusy(false);
+    }
+  }
+
+  async function runTagRename() {
+    const from = fromTag.trim();
+    const to = toTag.trim();
+    if (!from) return;
+    const verb = to ? `rename "${from}" to "${to}"` : `delete "${from}" from every post`;
+    if (!window.confirm(`Really ${verb}? This affects ${tagUsage?.count ?? "an unknown number of"} post(s) and cannot be undone.`)) return;
+    setTagBusy(true);
+    try {
+      const result = await apiFetch("/api/admin/tags/rename", {
+        method: "POST",
+        body: JSON.stringify({ from, to }),
+      });
+      showToast(`Updated ${result.affected} post(s).`, "success");
+      setFromTag("");
+      setToTag("");
+      setTagUsage(null);
+      clearApiCache("/api/media");
+    } catch (error) {
+      showToast(error.message, "error");
+    } finally {
+      setTagBusy(false);
+    }
+  }
+
   if (loading) return <SkeletonList />;
   if (!data) return <EmptyState title="Storage data unavailable" />;
 
@@ -377,6 +425,25 @@ function StorageTab({ ctx }) {
             <strong>{formatBytes(row.total_bytes)}</strong>
           </article>
         ))}
+      </div>
+      <h3>Tag tools</h3>
+      <div className="stacked-form">
+        <div className="form-row">
+          <input
+            type="text"
+            placeholder="from tag"
+            value={fromTag}
+            onChange={(event) => { setFromTag(event.target.value); setTagUsage(null); }}
+          />
+          <input type="text" placeholder="to tag (blank = delete)" value={toTag} onChange={(event) => setToTag(event.target.value)} />
+        </div>
+        <div className="form-actions settings-actions">
+          <button type="button" onClick={checkTagUsage} disabled={tagBusy || !fromTag.trim()}>Check usage</button>
+          <button type="button" onClick={runTagRename} disabled={tagBusy || !fromTag.trim()} className="danger">
+            {toTag.trim() ? "Rename / merge" : "Delete everywhere"}
+          </button>
+        </div>
+        {tagUsage ? <p className="muted-copy">"{tagUsage.tag}" appears on {tagUsage.count} post(s).</p> : null}
       </div>
     </div>
   );
@@ -441,6 +508,103 @@ function SiteSettingsTab({ ctx }) {
         <button className="primary" type="submit" disabled={saving}>{saving ? "Saving..." : "Save site settings"}</button>
       </div>
     </form>
+  );
+}
+
+// Admin side of the public status page (/status, see routes.lua's
+// M.public_status/M.admin_create_incident/M.admin_resolve_incident). A
+// plain list + create form rather than a sub-tab of its own -- this is a
+// handful-of-times-a-year action, not something that needs its own
+// dedicated navigation slot.
+function IncidentsPanel({ ctx }) {
+  const [incidents, setIncidents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [severity, setSeverity] = useState("minor");
+  const [busy, setBusy] = useState(false);
+  const showToast = ctx.showToast;
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await apiFetch("/api/status");
+      setIncidents(data.incidents || []);
+    } catch (error) {
+      showToast(error.message, "error");
+    } finally {
+      setLoading(false);
+    }
+  }, [showToast]);
+
+  useEffect(() => { load(); }, [load]);
+
+  async function createIncident(event) {
+    event.preventDefault();
+    if (!title.trim()) return;
+    setBusy(true);
+    try {
+      await apiFetch("/api/admin/incidents", {
+        method: "POST",
+        body: JSON.stringify({ title: title.trim(), description: description.trim() || undefined, severity }),
+      });
+      setTitle("");
+      setDescription("");
+      setSeverity("minor");
+      clearApiCache("/api/status");
+      load();
+    } catch (error) {
+      showToast(error.message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resolveIncident(id) {
+    setBusy(true);
+    try {
+      await apiFetch(`/api/admin/incidents/${id}/resolve`, { method: "POST" });
+      clearApiCache("/api/status");
+      load();
+    } catch (error) {
+      showToast(error.message, "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="admin-tab stacked-form">
+      <div className="settings-cluster">
+        <div className="settings-cluster-head"><h3><ShieldAlert size={16} /> Status page incidents</h3><p>Shown publicly at /status.</p></div>
+        <form className="form-row" onSubmit={createIncident}>
+          <input placeholder="Incident title" value={title} onChange={(event) => setTitle(event.target.value)} maxLength={200} />
+          <select value={severity} onChange={(event) => setSeverity(event.target.value)}>
+            <option value="minor">Minor</option>
+            <option value="major">Major</option>
+            <option value="critical">Critical</option>
+          </select>
+          <input placeholder="Description (optional)" value={description} onChange={(event) => setDescription(event.target.value)} maxLength={2000} />
+          <button type="submit" disabled={busy || !title.trim()}>Post incident</button>
+        </form>
+      </div>
+      {loading ? <SkeletonList /> : (
+        <div className="admin-reports-list">
+          {incidents.map((incident) => (
+            <article className="admin-report-row" key={incident.id}>
+              <div className="admin-report-body">
+                <strong>{incident.title}</strong>
+                <p className="muted-copy">{incident.severity} · started {formatDate(incident.started_at)}{incident.resolved ? ` · resolved ${formatDate(incident.resolved_at)}` : " · ongoing"}</p>
+              </div>
+              {!incident.resolved ? (
+                <button type="button" onClick={() => resolveIncident(incident.id)} disabled={busy}><CheckCircle2 size={16} />Resolve</button>
+              ) : null}
+            </article>
+          ))}
+          {!incidents.length ? <EmptyState title="No incidents posted" /> : null}
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -168,6 +168,7 @@ export function UploadPage({ ctx }) {
     pinned: false,
     auto_ai: true,
     publish_at: "",
+    expires_in_hours: "",
     check_site_duplicates: true,
   });
   const [preview, setPreview] = useState("");
@@ -395,6 +396,7 @@ export function UploadPage({ ctx }) {
       body.set("auto_ai", String(form.auto_ai));
       body.set("check_site_duplicates", String(form.check_site_duplicates));
       if (form.publish_at) body.set("publish_at", new Date(form.publish_at).toISOString());
+      if (form.expires_in_hours) body.set("expires_in_hours", form.expires_in_hours);
 
       let data;
       if (file.size <= EDGE_SAFE_UPLOAD_BYTES) {
@@ -795,6 +797,18 @@ export function UploadPage({ ctx }) {
               <span>Schedule for later <small>(optional)</small></span>
               <input type="datetime-local" value={form.publish_at} onChange={(event) => update("publish_at", event.target.value)} />
               <small className="field-hint">{form.publish_at ? "It stays hidden until then." : "Leave empty to publish right away."}</small>
+            </label>
+            <label className="field">
+              <span>Self-destruct <small>(optional)</small></span>
+              <select value={form.expires_in_hours} onChange={(event) => update("expires_in_hours", event.target.value)}>
+                <option value="">Never expires</option>
+                <option value="1">1 hour</option>
+                <option value="6">6 hours</option>
+                <option value="24">24 hours</option>
+                <option value="72">3 days</option>
+                <option value="168">7 days</option>
+              </select>
+              <small className="field-hint">{form.expires_in_hours ? "Automatically disappears after this -- works like a story." : "Leave as-is for a permanent post."}</small>
             </label>
             <div className="upload-toggles">
               {OPTION_TOGGLES.map((option) => (
