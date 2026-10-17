@@ -59,8 +59,10 @@ struct FeedView: View {
             FeedFilterSheet(viewModel: viewModel)
                 .presentationDetents([.medium, .large])
         }
-        .navigationDestination(item: $randomMedia) { media in
+        .navigationDestination(isPresented: $showingRandom) {
+            if let media = randomMedia {
             MediaDetailView(mediaId: media.id)
+        }
         }
         .refreshable {
             railsReloadKey += 1
@@ -78,9 +80,9 @@ struct FeedView: View {
                     viewModel.sort = defaultSort
                 }
                 await viewModel.loadInitial()
+                }
+                }
             }
-        }
-    }
 
     private var isFiltering: Bool {
         !viewModel.query.isEmpty || viewModel.categoryId != nil || viewModel.subcategoryId != nil || viewModel.mediaKind != nil
@@ -218,6 +220,7 @@ struct FeedView: View {
             defer { isPickingRandom = false }
             do {
                 randomMedia = try await GalleryAPIClient.shared.randomMedia()
+                showingRandom = true
             } catch {
                 if !error.isCancellation { viewModel.errorMessage = error.localizedDescription }
             }
@@ -348,3 +351,4 @@ struct FeedView: View {
         GridRhythm.lanes(density: settings?.gridDensity, regularWidth: horizontalSizeClass == .regular)
     }
 }
+
