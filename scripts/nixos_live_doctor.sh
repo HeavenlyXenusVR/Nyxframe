@@ -43,7 +43,7 @@ fi
 if git config user.email >/dev/null 2>&1 || git config --global user.email >/dev/null 2>&1; then
   echo "[ok] git identity configured"
 else
-  echo "[warn] git identity missing. Run: git config --global user.name 'HeavenlyXenusVR'; git config --global user.email 'heavenlyxenusvr@icloud.com'"
+  echo "[warn] git identity missing. Run: git config --global user.name 'HollowHeavenXR'; git config --global user.email 'uxzheavenlyyei@icloud.com'"
 fi
 
 [[ -f .env ]] && echo "[ok] .env exists" || echo "[warn] .env missing"

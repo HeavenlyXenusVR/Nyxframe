@@ -46,4 +46,4 @@ Nyxframe is the React and FastAPI media site for uploaded images, GIFs, wallpape
 
 ## Copyright
 
-(c) HeavenlyXenusVR. Discord: <https://discord.com/users/1304564041863266347>
+(c) HollowHeavenXR. Discord: <https://discord.com/users/1304564041863266347>

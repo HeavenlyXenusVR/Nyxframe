@@ -82,7 +82,7 @@ registered then deleted) viewer correctly added exactly 1 more.
 - Login was silently locking out any account with a non-lowercase stored
   username (`M.login` lowercased the input via `normalize_username()` but
   then did an exact-match `WHERE username=%s` against it) — confirmed
-  live against the site owner's own account ("HeavenlyXenusVR"). Fixed to
+  live against the site owner's own account ("HollowHeavenXR"). Fixed to
   `WHERE LOWER(username)=%s`; also hardened `M.register`'s duplicate-check
   the same way so a case-colliding second account can't be created going
   forward. Verified with a throwaway mixed-case test account: login now
@@ -139,7 +139,7 @@ surfacing. Also fixed a related profile-lookup bug: incorrectly reused
 routes.lua's login/register `normalize_username()` (which lowercases) for
 profile-by-username lookups, which are supposed to be case-sensitive exact
 matches per the original Python — broke looking up the site owner's own
-grandfathered mixed-case username, "HeavenlyXenusVR".
+grandfathered mixed-case username, "HollowHeavenXR".
 
 **Frontend, 2026-08-02**: the React SPA (`frontend/`, `node_modules/`,
 `static/react/`) is NOT going away — it's a real client-routed app (feed,

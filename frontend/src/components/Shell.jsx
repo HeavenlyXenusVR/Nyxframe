@@ -288,7 +288,7 @@ export function Shell({ ctx, children, className = "", style }) {
       <main className="main-stage" id="main-content" tabIndex={-1}>{children}</main>
       <BackToTop />
       <footer className="site-footer">
-        <span>Nyxframe // HeavenlyXenusVR</span>
+        <span>Nyxframe // HollowHeavenXR</span>
         <Link to="/status"><Activity size={14} />Status</Link>
         <Link to="/api-docs"><Code2 size={14} />API</Link>
         <a href="https://discord.com/users/1304564041863266347" target="_blank" rel="noreferrer">Discord</a>

@@ -1,15 +1,15 @@
 {
   "name": "Nyxframe",
   "identifier": "com.imagegallery.altstore-source",
-  "sourceURL": "https://raw.githubusercontent.com/HeavenlyXenusVR/Nyxframe/main/ios/altstore-source.json",
+  "sourceURL": "https://raw.githubusercontent.com/HollowHeavenXR/Nyxframe/main/ios/altstore-source.json",
   "apps": [
     {
       "name": "Nyxframe",
       "bundleIdentifier": "com.imagegallery.ios",
-      "developerName": "HeavenlyXenusVR",
+      "developerName": "HollowHeavenXR",
       "subtitle": "Browse, upload, and manage your self-hosted media gallery",
       "localizedDescription": "Nyxframe is the native iOS companion to the self-hosted Nyxframe web app: browse and upload photos/videos, react and comment, manage your uploads in Studio, follow other creators, and get notifications.",
-      "iconURL": "https://raw.githubusercontent.com/HeavenlyXenusVR/Nyxframe/main/favicon.ico",
+      "iconURL": "https://raw.githubusercontent.com/HollowHeavenXR/Nyxframe/main/favicon.ico",
       "tintColor": "37C9A7",
       "screenshotURLs": [],
       "versions": [
@@ -24,7 +24,7 @@
         {
           "version": "1.36.0",
           "date": "2026-10-17T18:55:44Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.36.0/ImageGallery-1.36.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.36.0/ImageGallery-1.36.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1451675,
           "minOSVersion": "16.0"
@@ -32,7 +32,7 @@
         {
           "version": "1.35.0",
           "date": "2026-10-04T02:41:21Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.35.0/ImageGallery-1.35.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.35.0/ImageGallery-1.35.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1380703,
           "minOSVersion": "16.0"
@@ -40,7 +40,7 @@
         {
           "version": "1.34.1",
           "date": "2026-09-30T01:39:15Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.34.1/ImageGallery-1.34.1-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.34.1/ImageGallery-1.34.1-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1184404,
           "minOSVersion": "16.0"
@@ -48,7 +48,7 @@
         {
           "version": "1.34.0",
           "date": "2026-09-30T00:40:38Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.34.0/ImageGallery-1.34.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.34.0/ImageGallery-1.34.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1184685,
           "minOSVersion": "16.0"
@@ -56,7 +56,7 @@
         {
           "version": "1.33.3",
           "date": "2026-09-14T16:08:46Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.33.3/ImageGallery-1.33.3-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.33.3/ImageGallery-1.33.3-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1136871,
           "minOSVersion": "16.0"
@@ -64,7 +64,7 @@
         {
           "version": "1.33.2",
           "date": "2026-09-14T15:47:58Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.33.2/ImageGallery-1.33.2-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.33.2/ImageGallery-1.33.2-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1137057,
           "minOSVersion": "16.0"
@@ -72,7 +72,7 @@
         {
           "version": "1.33.1",
           "date": "2026-09-14T15:19:32Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.33.1/ImageGallery-1.33.1-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.33.1/ImageGallery-1.33.1-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1137025,
           "minOSVersion": "16.0"
@@ -80,7 +80,7 @@
         {
           "version": "1.33.0",
           "date": "2026-09-14T14:57:25Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.33.0/ImageGallery-1.33.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.33.0/ImageGallery-1.33.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1137310,
           "minOSVersion": "16.0"
@@ -88,7 +88,7 @@
         {
           "version": "1.32.0",
           "date": "2026-09-13T14:53:11Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.32.0/ImageGallery-1.32.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.32.0/ImageGallery-1.32.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1108255,
           "minOSVersion": "16.0"
@@ -96,7 +96,7 @@
         {
           "version": "1.31.0",
           "date": "2026-09-13T06:58:35Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.31.0/ImageGallery-1.31.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.31.0/ImageGallery-1.31.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1105452,
           "minOSVersion": "16.0"
@@ -104,7 +104,7 @@
         {
           "version": "1.30.0",
           "date": "2026-09-13T06:44:44Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.30.0/ImageGallery-1.30.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.30.0/ImageGallery-1.30.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1100109,
           "minOSVersion": "16.0"
@@ -112,7 +112,7 @@
         {
           "version": "1.29.0",
           "date": "2026-09-13T06:30:41Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.29.0/ImageGallery-1.29.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.29.0/ImageGallery-1.29.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1085979,
           "minOSVersion": "16.0"
@@ -120,7 +120,7 @@
         {
           "version": "1.28.0",
           "date": "2026-09-02T05:15:28Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.28.0/ImageGallery-1.28.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.28.0/ImageGallery-1.28.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1067715,
           "minOSVersion": "16.0"
@@ -128,7 +128,7 @@
         {
           "version": "1.27.2",
           "date": "2026-08-31T17:46:49Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.27.2/ImageGallery-1.27.2-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.27.2/ImageGallery-1.27.2-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1048792,
           "minOSVersion": "16.0"
@@ -136,7 +136,7 @@
         {
           "version": "1.27.1",
           "date": "2026-08-29T18:11:26Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.27.1/ImageGallery-1.27.1-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.27.1/ImageGallery-1.27.1-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1041913,
           "minOSVersion": "16.0"
@@ -144,7 +144,7 @@
         {
           "version": "1.27.0",
           "date": "2026-08-22T20:13:12Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.27.0/ImageGallery-1.27.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.27.0/ImageGallery-1.27.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1041757,
           "minOSVersion": "16.0"
@@ -152,7 +152,7 @@
         {
           "version": "1.26.0",
           "date": "2026-08-22T19:55:03Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.26.0/ImageGallery-1.26.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.26.0/ImageGallery-1.26.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1041098,
           "minOSVersion": "16.0"
@@ -160,7 +160,7 @@
         {
           "version": "1.25.0",
           "date": "2026-08-22T19:21:13Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.25.0/ImageGallery-1.25.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.25.0/ImageGallery-1.25.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1041331,
           "minOSVersion": "16.0"
@@ -168,7 +168,7 @@
         {
           "version": "1.24.0",
           "date": "2026-08-22T17:31:38Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.24.0/ImageGallery-1.24.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.24.0/ImageGallery-1.24.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1051944,
           "minOSVersion": "16.0"
@@ -176,7 +176,7 @@
         {
           "version": "1.23.0",
           "date": "2026-08-22T17:21:55Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.23.0/ImageGallery-1.23.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.23.0/ImageGallery-1.23.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1051944,
           "minOSVersion": "16.0"
@@ -184,7 +184,7 @@
         {
           "version": "1.22.0",
           "date": "2026-08-22T16:52:48Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.22.0/ImageGallery-1.22.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.22.0/ImageGallery-1.22.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1047076,
           "minOSVersion": "16.0"
@@ -192,7 +192,7 @@
         {
           "version": "1.21.0",
           "date": "2026-08-22T16:38:54Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.21.0/ImageGallery-1.21.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.21.0/ImageGallery-1.21.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 1009577,
           "minOSVersion": "16.0"
@@ -200,7 +200,7 @@
         {
           "version": "1.20.0",
           "date": "2026-08-10T12:35:15Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.20.0/ImageGallery-1.20.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.20.0/ImageGallery-1.20.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 930325,
           "minOSVersion": "16.0"
@@ -208,7 +208,7 @@
         {
           "version": "1.19.0",
           "date": "2026-08-10T12:21:10Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.19.0/ImageGallery-1.19.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.19.0/ImageGallery-1.19.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 922208,
           "minOSVersion": "16.0"
@@ -216,7 +216,7 @@
         {
           "version": "1.18.0",
           "date": "2026-08-10T05:59:09Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.18.0/ImageGallery-1.18.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.18.0/ImageGallery-1.18.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 922237,
           "minOSVersion": "16.0"
@@ -224,7 +224,7 @@
         {
           "version": "1.17.0",
           "date": "2026-08-10T02:26:24Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.17.0/ImageGallery-1.17.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.17.0/ImageGallery-1.17.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 902031,
           "minOSVersion": "16.0"
@@ -232,7 +232,7 @@
         {
           "version": "1.16.0",
           "date": "2026-08-10T02:13:20Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.16.0/ImageGallery-1.16.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.16.0/ImageGallery-1.16.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 885878,
           "minOSVersion": "16.0"
@@ -240,7 +240,7 @@
         {
           "version": "1.15.0",
           "date": "2026-08-10T02:03:18Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.15.0/ImageGallery-1.15.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.15.0/ImageGallery-1.15.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 875182,
           "minOSVersion": "16.0"
@@ -248,7 +248,7 @@
         {
           "version": "1.14.0",
           "date": "2026-08-10T01:45:28Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.14.0/ImageGallery-1.14.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.14.0/ImageGallery-1.14.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 867900,
           "minOSVersion": "16.0"
@@ -256,7 +256,7 @@
         {
           "version": "1.13.0",
           "date": "2026-08-10T00:55:28Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.13.0/ImageGallery-1.13.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.13.0/ImageGallery-1.13.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 867348,
           "minOSVersion": "16.0"
@@ -264,7 +264,7 @@
         {
           "version": "1.12.0",
           "date": "2026-08-10T00:44:08Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.12.0/ImageGallery-1.12.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.12.0/ImageGallery-1.12.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 819141,
           "minOSVersion": "16.0"
@@ -272,7 +272,7 @@
         {
           "version": "1.11.0",
           "date": "2026-08-03T01:04:51Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.11.0/ImageGallery-1.11.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.11.0/ImageGallery-1.11.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 794550,
           "minOSVersion": "16.0"
@@ -280,7 +280,7 @@
         {
           "version": "1.10.0",
           "date": "2026-08-02T21:26:04Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.10.0/ImageGallery-1.10.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.10.0/ImageGallery-1.10.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 792206,
           "minOSVersion": "16.0"
@@ -288,7 +288,7 @@
         {
           "version": "1.9.6",
           "date": "2026-07-20T14:58:05Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.9.6/ImageGallery-1.9.6-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.9.6/ImageGallery-1.9.6-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 776233,
           "minOSVersion": "16.0"
@@ -296,7 +296,7 @@
         {
           "version": "1.9.5",
           "date": "2026-07-20T14:34:05Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.9.5/ImageGallery-1.9.5-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.9.5/ImageGallery-1.9.5-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 776257,
           "minOSVersion": "16.0"
@@ -304,7 +304,7 @@
         {
           "version": "1.9.3",
           "date": "2026-07-20T04:11:52Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.9.3/ImageGallery-1.9.3-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.9.3/ImageGallery-1.9.3-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 774877,
           "minOSVersion": "16.0"
@@ -312,7 +312,7 @@
         {
           "version": "1.9.2",
           "date": "2026-07-20T03:55:47Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.9.2/ImageGallery-1.9.2-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.9.2/ImageGallery-1.9.2-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 769790,
           "minOSVersion": "16.0"
@@ -320,7 +320,7 @@
         {
           "version": "1.9.1",
           "date": "2026-07-20T03:38:02Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.9.1/ImageGallery-1.9.1-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.9.1/ImageGallery-1.9.1-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 769873,
           "minOSVersion": "16.0"
@@ -328,7 +328,7 @@
         {
           "version": "1.9.0",
           "date": "2026-07-20T03:11:05Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.9.0/ImageGallery-1.9.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.9.0/ImageGallery-1.9.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 769704,
           "minOSVersion": "16.0"
@@ -336,7 +336,7 @@
         {
           "version": "1.8.0",
           "date": "2026-07-20T02:19:56Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.8.0/ImageGallery-1.8.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.8.0/ImageGallery-1.8.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 719635,
           "minOSVersion": "16.0"
@@ -344,7 +344,7 @@
         {
           "version": "1.7.0",
           "date": "2026-07-17T21:22:15Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.7.0/ImageGallery-1.7.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.7.0/ImageGallery-1.7.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 682379,
           "minOSVersion": "16.0"
@@ -352,7 +352,7 @@
         {
           "version": "1.6.0",
           "date": "2026-07-17T20:38:23Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.6.0/ImageGallery-1.6.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.6.0/ImageGallery-1.6.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 635325,
           "minOSVersion": "16.0"
@@ -360,7 +360,7 @@
         {
           "version": "1.5.0",
           "date": "2026-07-14T01:09:11Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.5.0/ImageGallery-1.5.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.5.0/ImageGallery-1.5.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 597932,
           "minOSVersion": "16.0"
@@ -368,7 +368,7 @@
         {
           "version": "1.4.0",
           "date": "2026-07-14T00:56:52Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.4.0/ImageGallery-1.4.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.4.0/ImageGallery-1.4.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 581785,
           "minOSVersion": "16.0"
@@ -376,7 +376,7 @@
         {
           "version": "1.3.0",
           "date": "2026-07-14T00:44:21Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.3.0/ImageGallery-1.3.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.3.0/ImageGallery-1.3.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 572158,
           "minOSVersion": "16.0"
@@ -384,7 +384,7 @@
         {
           "version": "1.2.0",
           "date": "2026-07-13T23:53:29Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.2.0/ImageGallery-1.2.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.2.0/ImageGallery-1.2.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 550881,
           "minOSVersion": "16.0"
@@ -392,7 +392,7 @@
         {
           "version": "1.1.2",
           "date": "2026-07-13T19:39:46Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.1.2/ImageGallery-1.1.2-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.1.2/ImageGallery-1.1.2-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 376723,
           "minOSVersion": "16.0"
@@ -400,7 +400,7 @@
         {
           "version": "1.1.1",
           "date": "2026-07-13T19:24:28Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.1.1/ImageGallery-1.1.1-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.1.1/ImageGallery-1.1.1-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 375679,
           "minOSVersion": "16.0"
@@ -408,7 +408,7 @@
         {
           "version": "1.1.0",
           "date": "2026-07-13T19:07:25Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.1.0/ImageGallery-1.1.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.1.0/ImageGallery-1.1.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 375619,
           "minOSVersion": "16.0"
@@ -416,7 +416,7 @@
         {
           "version": "1.0.0",
           "date": "2026-07-13T15:06:43Z",
-          "downloadURL": "https://github.com/HeavenlyXenusVR/Nyxframe/releases/download/ios%2Fv1.0.0/ImageGallery-1.0.0-unsigned.ipa",
+          "downloadURL": "https://github.com/HollowHeavenXR/Nyxframe/releases/download/ios%2Fv1.0.0/ImageGallery-1.0.0-unsigned.ipa",
           "localizedDescription": "See release notes on GitHub.",
           "size": 360058,
           "minOSVersion": "16.0"

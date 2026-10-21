@@ -234,7 +234,7 @@ publish_config() {
   fi
   if ! run_git config user.email >/dev/null 2>&1 && ! git config --global user.email >/dev/null 2>&1; then
     echo "Skipping live-config auto-push because git user.email is not configured." >&2
-    echo "Run: git config --global user.name 'HeavenlyXenusVR' && git config --global user.email 'heavenlyxenusvr@icloud.com'" >&2
+    echo "Run: git config --global user.name 'HollowHeavenXR' && git config --global user.email 'uxzheavenlyyei@icloud.com'" >&2
     return
   fi
   if ! validate_config_json; then

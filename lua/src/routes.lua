@@ -503,7 +503,7 @@ function M.register(req)
   if #password < 8 then return 400, { detail = "Password must be at least 8 characters." } end
 
   -- LOWER() on both sides here too: an exact-match check would let someone
-  -- register "heavenlyxenusvr" today even though "HeavenlyXenusVR" already
+  -- register "heavenlyxenusvr" today even though "HollowHeavenXR" already
   -- exists (see login's fix above for why case can differ on old
   -- accounts), creating a second, genuinely different account that a
   -- case-insensitive login could then no longer tell apart from the
@@ -551,7 +551,7 @@ function M.login(req)
   -- LOWER(username)=%s, not username=%s: normalize_username() lowercases
   -- the input, but usernames created before the Lua rewrite (or imported
   -- from the old MySQL DB) can have mixed-case stored values -- e.g. the
-  -- site owner's own "HeavenlyXenusVR". An exact-match comparison against
+  -- site owner's own "HollowHeavenXR". An exact-match comparison against
   -- a lowercased input silently locked every such account out of login
   -- entirely (confirmed live 2026-08-02: real failed attempts against a
   -- correct password, not rate-limited, not banned -- just never matching
@@ -6567,7 +6567,7 @@ end
 -- already (register() lowercases at insert time), but accounts created
 -- before that -- or migrated from the old MySQL DB -- can have mixed-case
 -- usernames, so forcibly lowercasing the URL param here would 404 real
--- profiles like the site owner's own "HeavenlyXenusVR".
+-- profiles like the site owner's own "HollowHeavenXR".
 local function trimmed_username(u)
   return trim(u or ""):sub(1, 40)
 end
@@ -11685,11 +11685,11 @@ local function download_latest_ipa(req, repo, key, display_name)
 end
 
 function M.download_lumisound(req)
-  return download_latest_ipa(req, "HeavenlyXenusVR/Lumisound", "lumisound", "Lumisound")
+  return download_latest_ipa(req, "HollowHeavenXR/Lumisound", "lumisound", "Lumisound")
 end
 
 function M.download_nyxframe(req)
-  return download_latest_ipa(req, "HeavenlyXenusVR/Nyxframe", "nyxframe", "Nyxframe")
+  return download_latest_ipa(req, "HollowHeavenXR/Nyxframe", "nyxframe", "Nyxframe")
 end
 
 -- ---------------------------------------------------------------------------
