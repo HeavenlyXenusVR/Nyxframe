@@ -74,14 +74,17 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
 
     /// iOS relaunches (or wakes) the app to deliver this when a background
     /// `URLSession` transfer finishes while the app wasn't running to see
-    /// it directly -- `identifier` is `BackgroundUploadManager`'s session
-    /// identifier ("com.imagegallery.ios.bg-upload"), the only background
-    /// session this app creates. Stashing the completion handler on the
-    /// manager itself (rather than calling it here) is required: iOS
-    /// expects it called only after every queued delegate event has been
-    /// replayed and handled, which `BackgroundUploadManager` finds out via
-    /// its own `urlSessionDidFinishEvents(forBackgroundURLSession:)`.
+    /// it directly -- `identifier` tells us which of the two background
+    /// sessions this app creates it's for (upload or download). Stashing
+    /// the completion handler on the owning manager (rather than calling it
+    /// here) is required: iOS expects it called only after every queued
+    /// delegate event has been replayed and handled, which each manager
+    /// finds out via its own `urlSessionDidFinishEvents(forBackgroundURLSession:)`.
     func application(_ application: UIApplication, handleEventsForBackgroundURLSession identifier: String, completionHandler: @escaping () -> Void) {
-        BackgroundUploadManager.shared.backgroundCompletionHandler = completionHandler
+        if identifier == BackgroundDownloadManager.sessionIdentifier {
+            BackgroundDownloadManager.shared.backgroundCompletionHandler = completionHandler
+        } else {
+            BackgroundUploadManager.shared.backgroundCompletionHandler = completionHandler
+        }
     }
 }

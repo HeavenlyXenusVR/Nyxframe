@@ -1,8 +1,7 @@
 -- Weekly per-creator Discord stats digest. Runs as a copas background
--- coroutine within the same event loop as the HTTP server -- same pattern
--- telegram.lua's poll_loop/health_watch_loop and discord_webhook.lua's
--- fire-and-forget delivery already use (M.start() called from main.lua,
--- before httpd.run()).
+-- coroutine within the same event loop as the HTTP server -- same
+-- fire-and-forget pattern discord_webhook.lua's delivery uses (M.start()
+-- called from main.lua, before httpd.run()).
 --
 -- Targets creators who already have a `discord_webhook_url` set in their
 -- user_settings -- the same per-user setting notify_discord_upload already

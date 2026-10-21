@@ -9,6 +9,7 @@ struct ImageGalleryApp: App {
     @StateObject private var unreadCounts = UnreadCountsService()
     @StateObject private var uploadRecovery = UploadRecoveryService()
     @StateObject private var backgroundUploads = BackgroundUploadManager.shared
+    @StateObject private var backgroundDownloads = BackgroundDownloadManager.shared
 
     var body: some Scene {
         WindowGroup {
@@ -19,6 +20,7 @@ struct ImageGalleryApp: App {
                 .environmentObject(unreadCounts)
                 .environmentObject(uploadRecovery)
                 .environmentObject(backgroundUploads)
+                .environmentObject(backgroundDownloads)
         }
     }
 }
@@ -31,6 +33,7 @@ struct RootView: View {
     @EnvironmentObject private var unreadCounts: UnreadCountsService
     @EnvironmentObject private var uploadRecovery: UploadRecoveryService
     @EnvironmentObject private var backgroundUploads: BackgroundUploadManager
+    @EnvironmentObject private var backgroundDownloads: BackgroundDownloadManager
     @AppStorage("theme_mode") private var themeMode = "system"
     @Environment(\.scenePhase) private var scenePhase
 
@@ -130,6 +133,20 @@ struct RootView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(backgroundUploads.completionNotice ?? "")
+        }
+        // Sibling to the two upload alerts above, for the symmetric
+        // download side (BackgroundDownloadManager) -- same "transfer
+        // itself finished/failed" scope, its own completion notice.
+        .alert(
+            "Download",
+            isPresented: Binding(
+                get: { backgroundDownloads.completionNotice != nil },
+                set: { isPresented in if !isPresented { backgroundDownloads.completionNotice = nil } }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(backgroundDownloads.completionNotice ?? "")
         }
     }
 

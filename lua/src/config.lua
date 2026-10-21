@@ -137,33 +137,13 @@ function M.load()
     ai_ollama_model = env("GALLERY_OLLAMA_MODEL", "llava"),
     ai_timeout_seconds = env_int("GALLERY_AI_TIMEOUT_SECONDS", 45),
 
-    telegram_bot_token = env("GALLERY_TELEGRAM_BOT_TOKEN") or env("TELEGRAM_BOT_TOKEN", ""),
     -- Discord bot token for DM-based account verification (discord_bot.lua)
     -- -- distinct from the per-creator discord_webhook_url setting (that's
     -- outbound-only, to a channel; this is a real bot that can open a DM
     -- with any user who shares a server with it). Blank by default: every
     -- discord_bot.lua call gracefully no-ops/reports "not configured yet"
-    -- until this is set, same convention as telegram_bot_token above.
+    -- until this is set.
     discord_bot_token = env("GALLERY_DISCORD_BOT_TOKEN", ""),
-    telegram_allowed_chat_ids = (function()
-      local raw = env_csv("GALLERY_TELEGRAM_ALLOWED_CHAT_IDS")
-      if #raw == 0 then raw = env_csv("TELEGRAM_ALLOWED_CHAT_IDS") end
-      local ids = {}
-      for _, v in ipairs(raw) do
-        local n = tonumber(v)
-        if n then ids[#ids + 1] = math.floor(n) end
-      end
-      return ids
-    end)(),
-    telegram_owner_chat_id = tonumber(env("GALLERY_TELEGRAM_OWNER_CHAT_ID") or env("TELEGRAM_OWNER_CHAT_ID")),
-    telegram_polling_enabled = env_bool("GALLERY_TELEGRAM_POLLING_ENABLED", (env("GALLERY_TELEGRAM_BOT_TOKEN") or env("TELEGRAM_BOT_TOKEN")) ~= nil),
-    -- Deliberately a DIFFERENT env var name than GALLERY_TELEGRAM_POLLING_ENABLED
-    -- (not one .env already sets): a systemd Environment= override of that
-    -- same key was empirically observed NOT to win over EnvironmentFile=
-    -- for this unit despite appearing later in the file (contrary to the
-    -- documented "last one wins" precedence) -- rather than fight that, this
-    -- is a hard kill-switch on a name .env can never touch.
-    telegram_force_disabled = env_bool("GALLERY_LUA_TELEGRAM_FORCE_DISABLE", false),
     ai_training_examples_limit = math.max(0, math.min(1000, env_int("GALLERY_AI_TRAINING_EXAMPLES_LIMIT", 300))),
 
     -- lua/src/telemetry.lua: durable telemetry_events rows (uploads, auth,

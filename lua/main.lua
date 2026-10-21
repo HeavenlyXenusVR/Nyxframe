@@ -365,28 +365,18 @@ else
   print("[nyxframe] WARNING: Postgres not reachable at startup: " .. tostring(err))
 end
 
--- Telegram polling and the weekly digest are process-wide singletons (one
--- Telegram bot token can only have one active getUpdates long-poller --
--- Telegram itself errors the second one with "terminated by other
--- getUpdates request" -- and the digest would otherwise send one duplicate
--- Discord message per worker). Now that this backend can run as multiple
--- worker processes behind proxy.lua (see that file's header comment), only
--- the worker whose GALLERY_HTTP_PORT matches GALLERY_PRIMARY_WORKER_PORT
--- (or the single-worker deployment, where this is simply unset) starts
--- either one. Sub-worker instances still serve HTTP requests normally --
--- this only skips the two background singleton jobs.
+-- The weekly digest is a process-wide singleton (it would otherwise send
+-- one duplicate Discord message per worker). Now that this backend can run
+-- as multiple worker processes behind proxy.lua (see that file's header
+-- comment), only the worker whose GALLERY_HTTP_PORT matches
+-- GALLERY_PRIMARY_WORKER_PORT (or the single-worker deployment, where this
+-- is simply unset) starts it. Sub-worker instances still serve HTTP
+-- requests normally -- this only skips the background singleton job.
 local primary_port = tonumber(os.getenv("GALLERY_PRIMARY_WORKER_PORT"))
 local is_primary_worker = not primary_port or primary_port == settings.port
 
--- Telegram control-panel bridge (see lua/src/telegram.lua) -- runs as a
--- copas background coroutine within this same event loop, started before
--- httpd.run() so it's polling by the time the first HTTP request arrives.
--- No-op if no bot token is configured.
-local telegram = require("telegram")
-if is_primary_worker then telegram.start(settings) end
-
--- Weekly per-creator Discord stats digest (see lua/src/digest.lua) -- same
--- copas-background-coroutine pattern as telegram above.
+-- Weekly per-creator Discord stats digest (see lua/src/digest.lua) -- runs
+-- as a copas background coroutine within this same event loop.
 local digest = require("digest")
 if is_primary_worker then digest.start(settings) end
 

@@ -39,8 +39,6 @@ const THEME_ICONS = { dark: Moon, light: Sun, "": SunMoon };
 const THEME_LABELS = { dark: "Switch to light theme", light: "Switch to system theme", "": "Switch to dark theme" };
 
 export function Shell({ ctx, children, className = "", style }) {
-  const checks = Array.isArray(ctx.lookups.live?.checks) ? ctx.lookups.live.checks : [];
-  const telegram = checks.find((item) => item.id === "telegram");
   const liveOk = ctx.lookups.live?.ok ?? ctx.lookups.live?.check_map?.db ?? ctx.lookups.live?.check_map?.api;
   const healthText = liveOk ? "Live" : "Checking";
   const username = ctx.user?.username || "guest";
@@ -248,7 +246,7 @@ export function Shell({ ctx, children, className = "", style }) {
             <span className="topbar-search-label">Search</span>
             <kbd>{typeof navigator !== "undefined" && navigator.platform?.includes("Mac") ? "⌘K" : "Ctrl K"}</kbd>
           </button>
-          <span className={`health-pill ${liveOk ? "is-live" : ""}`} title={telegram?.detail || ""}>{healthText}</span>
+          <span className={`health-pill ${liveOk ? "is-live" : ""}`}>{healthText}</span>
           <ThemeToggle quickTheme={ctx.quickTheme} onCycle={ctx.cycleTheme} />
           <NotificationBell ctx={ctx} />
           {ctx.user ? (

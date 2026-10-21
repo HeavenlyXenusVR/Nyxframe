@@ -7,8 +7,7 @@
 -- through copas.http (not ssl.https directly) so it yields back to the
 -- shared event loop while waiting on socket I/O instead of blocking every
 -- other in-flight request on this single-threaded server for the duration
--- of the call -- discovered the hard way via telegram.lua's long-poll doing
--- exactly that with a blocking call.
+-- of the call.
 
 local M = {}
 

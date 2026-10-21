@@ -348,7 +348,7 @@ function M.send_to_subscription(subscription, payload_table)
   if not jwt then return false, nil, err2 end
 
   -- copas.http, not a blocking HTTP client -- same reasoning as
-  -- discord_webhook.lua/telegram.lua/ai_metadata.lua's identical choice.
+  -- discord_webhook.lua/ai_metadata.lua's identical choice.
   local copas_http = require("copas.http")
   local ltn12 = require("ltn12")
   local response_chunks = {}

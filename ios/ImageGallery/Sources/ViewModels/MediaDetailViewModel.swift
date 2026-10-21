@@ -57,6 +57,21 @@ final class MediaDetailViewModel: ObservableObject {
         }
     }
 
+    /// Enqueues the post's original file for a background download into
+    /// the device's Nyxframe folder (see `BackgroundDownloadManager`).
+    /// `downloadUrl` already carries the signed per-media `?access=` token
+    /// `with_urls()` attaches server-side, so this needs no auth header --
+    /// the same property `ShareLink` in `MediaActionBar` already uses.
+    func downloadToDevice() {
+        guard let media, let urlString = media.downloadUrl, let url = URL(string: urlString) else { return }
+        let ext = media.isVideo ? "mp4" : (url.pathExtension.isEmpty ? "jpg" : url.pathExtension)
+        let base = (media.title?.nilIfEmpty ?? "nyxframe_\(media.id)")
+            .components(separatedBy: CharacterSet(charactersIn: "/\\:*?\"<>|"))
+            .joined()
+        BackgroundDownloadManager.shared.enqueue(url: url, suggestedFilename: "\(base).\(ext)", mediaId: media.id)
+        Haptics.light()
+    }
+
     func toggleBookmark() async {
         guard let media, !isTogglingBookmark else { return }
         isTogglingBookmark = true

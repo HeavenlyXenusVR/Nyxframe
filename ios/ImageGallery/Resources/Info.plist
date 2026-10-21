@@ -60,6 +60,18 @@
     <key>LSRequiresIPhoneOS</key>
     <true/>
 
+    <!-- Exposes this app's own Documents/ directory as a "Nyxframe" folder
+         under Files -> On My iPhone/iPad -- the destination for
+         BackgroundDownloadManager's saved videos/images (see Settings ->
+         "Save to Files"). Both keys are required together: UIFileSharingEnabled
+         alone only exposes the folder to iTunes/Finder file sharing, not the
+         on-device Files app; LSSupportsOpeningDocumentsInPlace is what makes
+         Files itself list it. -->
+    <key>UIFileSharingEnabled</key>
+    <true/>
+    <key>LSSupportsOpeningDocumentsInPlace</key>
+    <true/>
+
     <!-- Required for Picture in Picture (video player + background music)
          to keep playing once the app is backgrounded -- without this
          capability declared, AVKit either refuses to activate PiP at all

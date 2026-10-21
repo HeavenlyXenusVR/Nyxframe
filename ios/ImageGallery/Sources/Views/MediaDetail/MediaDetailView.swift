@@ -197,7 +197,8 @@ struct MediaDetailView: View {
                 onLike: { Task { await viewModel.toggleLike() } },
                 onBookmark: { Task { await viewModel.toggleBookmark() } },
                 onReport: { showingReport = true },
-                onOpenOriginal: { openOriginal(media) }
+                onOpenOriginal: { openOriginal(media) },
+                onDownload: { viewModel.downloadToDevice() }
             )
 
             if let description = media.description, !description.isEmpty {

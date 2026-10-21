@@ -8042,9 +8042,9 @@ function M.ai_vision_status(req)
     end
   elseif provider == "ollama" then
     local base_url = tostring(M.settings.ai_ollama_base_url or "http://127.0.0.1:11434"):gsub("/+$", "")
-    -- copas.http, not socket.http directly -- see telegram.lua's api_call
-    -- comment for why a blocking HTTP call here would stall every other
-    -- in-flight request on this single-threaded server.
+    -- copas.http, not socket.http directly -- a blocking HTTP call here
+    -- would stall every other in-flight request on this single-threaded
+    -- server.
     local ok, http = pcall(require, "copas.http")
     local ok2, result = pcall(function()
       local ltn12 = require("ltn12")
@@ -8503,6 +8503,30 @@ function range_io.parse(req, total, mime_type, extra_headers)
   return 206, start_byte, end_byte, headers
 end
 
+-- Reads an open file handle in chunks, yielding to copas between them,
+-- instead of one uninterruptible f:read("*a"). copas is single-threaded
+-- (it's the same thread serving every other request), so a single blocking
+-- read of a large file -- a cold multi-MB media file on the spinning
+-- /mnt/fastssd disk is a real tens-to-hundreds-of-ms read -- stalls the
+-- entire worker for all of it, not just the current request. Same pattern
+-- already proven for HLS segments (see serve_hls_segment above).
+--
+-- Hung off M (not its own top-level local) because this file is already
+-- sitting at LuaJIT's 200-local-per-function ceiling for its outer chunk --
+-- one more top-level `local` here fails the whole module to load.
+function M._read_file_chunked(f)
+  local copas_ok, copas = pcall(require, "copas")
+  local parts, n = {}, 0
+  while true do
+    local chunk = f:read(256 * 1024)
+    if not chunk or chunk == "" then break end
+    n = n + 1
+    parts[n] = chunk
+    if copas_ok then copas.sleep(0) end
+  end
+  return table.concat(parts)
+end
+
 -- Resolves what to actually serve for a media item: DB blob (preferred) or
 -- legacy on-disk file. Returns (content_bytes, mime_type) or (nil, nil) if
 -- genuinely missing -- callers must 404 cleanly on the latter, not crash
@@ -8513,7 +8537,7 @@ local function resolve_media_bytes(item)
   if cache_path then
     local cf = io.open(cache_path, "rb")
     if cf then
-      local bytes = cf:read("*a")
+      local bytes = M._read_file_chunked(cf)
       cf:close()
       if bytes and #bytes > 0 then return bytes, item.mime_type, item.original_filename end
     end
@@ -8532,7 +8556,7 @@ local function resolve_media_bytes(item)
     if legacy then
       local f = io.open(legacy, "rb")
       if f then
-        content = f:read("*a")
+        content = M._read_file_chunked(f)
         f:close()
         mime_type, original_filename = item.mime_type, item.original_filename
       end
@@ -8781,7 +8805,7 @@ function M.serve_media_thumb(req)
   local cache_path = media_kind == "video" and shard_path or flat_path
   local cf = io.open(cache_path, "rb")
   if cf then
-    local bytes = cf:read("*a")
+    local bytes = M._read_file_chunked(cf)
     cf:close()
     return 200, bytes, { ["Content-Type"] = "image/webp", ["Cache-Control"] = "public, max-age=604800, immutable" }
   end
@@ -9399,7 +9423,7 @@ local function ensure_video_quality_cache(media_id, item, content, quality)
 
   local existing = io.open(cache_file, "rb")
   if existing then
-    local bytes = existing:read("*a")
+    local bytes = M._read_file_chunked(existing)
     existing:close()
     if bytes and #bytes > 0 then return bytes, "video/mp4" end
   end
@@ -11605,7 +11629,7 @@ local function download_latest_ipa(req, repo, key, display_name)
 
   local existing = io.open(final_path, "rb")
   if existing then
-    local content = existing:read("*a")
+    local content = M._read_file_chunked(existing)
     existing:close()
     return 200, content, {
       ["Content-Type"] = "application/octet-stream",
@@ -11645,7 +11669,7 @@ local function download_latest_ipa(req, repo, key, display_name)
   while waited < PROJECT_DOWNLOAD_POLL_SECONDS do
     local f = io.open(final_path, "rb")
     if f then
-      local content = f:read("*a")
+      local content = M._read_file_chunked(f)
       f:close()
       return 200, content, {
         ["Content-Type"] = "application/octet-stream",

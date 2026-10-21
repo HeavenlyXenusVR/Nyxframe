@@ -12,6 +12,7 @@ struct MediaActionBar: View {
     let onBookmark: () -> Void
     let onReport: () -> Void
     let onOpenOriginal: () -> Void
+    let onDownload: () -> Void
 
     @State private var likeBounce = false
 
@@ -50,6 +51,11 @@ struct MediaActionBar: View {
                         onOpenOriginal()
                     } label: {
                         Label("Open Original", systemImage: "arrow.up.forward.square")
+                    }
+                    Button {
+                        onDownload()
+                    } label: {
+                        Label("Download to Device", systemImage: "square.and.arrow.down")
                     }
                     Button(role: .destructive, action: onReport) {
                         Label("Report", systemImage: "flag")

@@ -7,10 +7,10 @@
 -- arbitrary strangers with no shared server -- there is no way around that
 -- from this side).
 --
--- Uses copas.http (like telegram.lua's api_call) so a slow Discord response
--- yields back to the shared event loop instead of blocking every other
--- in-flight request -- same reasoning as telegram.lua's own header comment
--- about why plain ssl.https/socket.http must never be used here.
+-- Uses copas.http so a slow Discord response yields back to the shared
+-- event loop instead of blocking every other in-flight request -- plain
+-- ssl.https/socket.http must never be used here, since either would stall
+-- this single-threaded server for the duration of the call.
 --
 -- No bot token is configured out of the box (GALLERY_DISCORD_BOT_TOKEN is
 -- blank by default, config.lua) -- every function below reports
