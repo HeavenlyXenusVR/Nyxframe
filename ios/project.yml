@@ -101,6 +101,15 @@ targets:
           - UploadViewModel.swift
           - StudioViewModel.swift
           - SettingsViewModel.swift
+          # Added 2026-10-12 alongside visual search; uses PhotosPickerItem
+          # (PhotosUI), an iOS/iPadOS-only type with no tvOS equivalent --
+          # missing from this list broke every tvOS build since (confirmed
+          # via `gh run list`: build-tvos.yml has failed on exactly this
+          # compile error on every push since that commit, and
+          # release-ios.yml's tvOS archive step has the same error hidden
+          # behind its own `continue-on-error`, silently shipping every
+          # release since without an Apple TV IPA at all).
+          - VisualSearchViewModel.swift
       - path: ImageGallery/Sources/Views/MediaDetail/VideoPlayerController.swift
       - path: NyxframeTV/Sources
       # Listed under sources (XcodeGen has no separate `resources` key; it
