@@ -311,6 +311,7 @@ function draftFromMedia(media) {
 export function MediaEditor({ ctx, media, onChanged }) {
   const [draft, setDraft] = useState(() => draftFromMedia(media));
   const [busy, setBusy] = useState(false);
+  const prefillRef = useRef(null); // uncontrolled -- "Prefill from post" input, read on click only
 
   useEffect(() => { setDraft(draftFromMedia(media)); }, [media]);
 
@@ -319,6 +320,25 @@ export function MediaEditor({ ctx, media, onChanged }) {
   const subcategories = selectedCategory?.subcategories || selectedCategory?.children || [];
 
   function set(key, value) { setDraft((current) => ({ ...current, [key]: value })); }
+
+  // Same "Prefill from post" capability as UploadPage.jsx's upload form --
+  // see its header comment. Duplicated rather than shared as a hook since
+  // the two forms use different state shapes (draft/set here vs form/update
+  // there) for a handful of lines of logic.
+  async function prefillTagsFromPost() {
+    const idMatch = prefillRef.current?.value.match(/(\d+)\s*$/);
+    const mediaId = idMatch && idMatch[1];
+    if (!mediaId) return ctx.showToast("Enter a post id or paste a post URL.", "error");
+    try {
+      const data = await apiFetch(`/api/media/${mediaId}`);
+      const tags = Array.isArray(data.tags) ? data.tags : [];
+      if (!tags.length) return ctx.showToast(`"${data.title || `Post #${mediaId}`}" has no tags to copy.`, "info");
+      set("tags", tags.join(", "));
+      ctx.showToast(`Copied ${tags.length} tag${tags.length === 1 ? "" : "s"} from "${data.title || `Post #${mediaId}`}".`, "success");
+    } catch (error) {
+      ctx.showToast(error.message || "Could not load that post.", "error");
+    }
+  }
 
   function setSlot(kind, index, value) {
     setDraft((current) => {
@@ -370,6 +390,13 @@ export function MediaEditor({ ctx, media, onChanged }) {
       <label className="field"><span>Title</span><input value={draft.title} onChange={(event) => set("title", event.target.value)} maxLength={160} /></label>
       <label className="field"><span>Description</span><textarea value={draft.description} onChange={(event) => set("description", event.target.value)} rows={4} maxLength={2000} /></label>
       <label className="field"><span>Tags</span><input value={draft.tags} onChange={(event) => set("tags", event.target.value)} placeholder="comma separated" /></label>
+      <div className="field upload-prefill-tags">
+        <span className="field-head">Reuse tags from another post</span>
+        <div className="upload-prefill-tags-row">
+          <input ref={prefillRef} type="text" placeholder="Post id or URL" aria-label="Post id or URL to copy tags from" />
+          <button type="button" onClick={prefillTagsFromPost}><Copy size={15} />Prefill from post</button>
+        </div>
+      </div>
       <label className="field"><span>Original source</span><input value={draft.source_url} onChange={(event) => set("source_url", event.target.value)} type="url" inputMode="url" maxLength={500} placeholder="https://… where this came from" /></label>
       <label className="field"><span>Category</span>
         <select value={draft.category_id} onChange={(event) => setDraft((current) => ({ ...current, category_id: event.target.value, subcategory_ids: slots([]) }))}>

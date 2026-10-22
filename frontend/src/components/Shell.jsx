@@ -149,7 +149,13 @@ export function Shell({ ctx, children, className = "", style }) {
     await Promise.all(jobs.map(async (job) => {
       try {
         const data = await apiFetch(`/api/media/upload/job/${encodeURIComponent(job.jobId)}`);
-        if (data.status === "processing") return;
+        // "error" + retrying=true means the backend hit a transient failure
+        // but is auto-retrying the same job (up to 3 attempts, see
+        // upload_chunk_finish in routes.lua) -- not a final outcome yet, so
+        // this keeps polling exactly like "processing" instead of flashing
+        // a premature failure toast that a moment later gets contradicted
+        // by a success one.
+        if (data.status === "processing" || (data.status === "error" && data.retrying)) return;
         removePendingUploadJob(job.jobId);
         if (data.status === "done") {
           ctx.showToast(`"${job.filename}" finished uploading.`, "success");

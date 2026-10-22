@@ -890,23 +890,29 @@ local function gemini_vision_analysis(opts)
   -- other in-flight request this server is handling) for the full duration
   -- of the network call. copas.http yields back to the scheduler while
   -- waiting on socket I/O instead.
-  local copas_http = require("copas.http")
+  --
+  -- http_retry.request (not a bare copas_http.request) so a single transient
+  -- timeout against Gemini doesn't immediately demote this upload to the
+  -- heuristic fallback -- up to 3 attempts total, only retrying the
+  -- "no response at all" case (see http_retry.lua's header comment).
+  local http_retry = require("http_retry")
   local ltn12 = require("ltn12")
   local url = string.format(
     "https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s",
     opts.model:gsub("[^%w%-%.]", function(c) return string.format("%%%02X", c:byte()) end),
     opts.api_key:gsub("[^%w%-%.]", function(c) return string.format("%%%02X", c:byte()) end)
   )
-  local response_chunks = {}
-  local ok, status = copas_http.request({
-    url = url,
-    method = "POST",
-    headers = { ["Content-Type"] = "application/json", ["Content-Length"] = tostring(#payload) },
-    source = ltn12.source.string(payload),
-    sink = ltn12.sink.table(response_chunks),
-    timeout = opts.timeout_seconds,
-  })
-  local raw = table.concat(response_chunks)
+  local ok, status, raw = http_retry.request(function()
+    local chunks = {}
+    return {
+      url = url,
+      method = "POST",
+      headers = { ["Content-Type"] = "application/json", ["Content-Length"] = tostring(#payload) },
+      source = ltn12.source.string(payload),
+      sink = ltn12.sink.table(chunks),
+      timeout = opts.timeout_seconds,
+    }, chunks
+  end)
   if not ok or type(status) ~= "number" or status < 200 or status >= 300 then
     return nil, string.format("Gemini API error %s: %s", tostring(status), sanitize_ai_error_text(raw):sub(1, 180))
   end

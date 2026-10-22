@@ -30,18 +30,25 @@ end
 local function deliver(webhook_url, embeds)
   local ok, err = pcall(function()
     require("copas")
-    local copas_http = require("copas.http")
+    local http_retry = require("http_retry")
     local ltn12 = require("ltn12")
     local cjson = require("cjson.safe")
     local body = cjson.encode({ embeds = embeds })
-    local response_chunks = {}
-    local _, status = copas_http.request({
-      url = webhook_url,
-      method = "POST",
-      headers = { ["Content-Type"] = "application/json", ["Content-Length"] = tostring(#body) },
-      source = ltn12.source.string(body),
-      sink = ltn12.sink.table(response_chunks),
-    })
+    -- http_retry (up to 3 attempts) instead of a bare copas_http.request:
+    -- this already runs on its own detached background thread, so there's
+    -- no response waiting on it -- a transient timeout retrying a couple
+    -- seconds later costs nothing and saves the notification that would
+    -- otherwise just be silently dropped.
+    local _, status = http_retry.request(function()
+      local chunks = {}
+      return {
+        url = webhook_url,
+        method = "POST",
+        headers = { ["Content-Type"] = "application/json", ["Content-Length"] = tostring(#body) },
+        source = ltn12.source.string(body),
+        sink = ltn12.sink.table(chunks),
+      }, chunks
+    end)
     if status and (status < 200 or status >= 300) then
       error("Discord webhook responded with HTTP " .. tostring(status))
     end

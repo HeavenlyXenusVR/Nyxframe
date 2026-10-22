@@ -60,18 +60,42 @@ end
 
 local next_backend = 0
 
--- Round-robins across every backend once per connection, skipping any that
--- refuse the TCP connect (a worker that's down, still starting up, or mid-
--- restart) rather than failing the client outright -- the whole point of
--- running more than one worker is that one being slow/dead shouldn't take
--- the site down with it.
+-- Active-connection count per backend, indexed the same as `backends`.
+-- Incremented the moment a connection is handed to a backend, decremented
+-- the moment that connection's pump (both directions) finishes -- see
+-- handle_connection below. Each worker's own single-threaded event loop
+-- means one busy request (a slow synchronous ffmpeg call, a stalled
+-- upload) can leave that worker's connections sitting longer than the
+-- others', so routing by "fewest connections right now" rather than a
+-- blind round-robin steers new connections away from whichever worker is
+-- currently the busiest instead of queuing behind it regardless.
+local active_connections = {}
+for i = 1, #backends do active_connections[i] = 0 end
+
+-- Tries backends in order of fewest active connections first, falling back
+-- through the rest on a failed TCP connect (worker down, still starting up,
+-- or mid-restart) -- same failover guarantee the old pure round-robin had,
+-- just reordered by current load instead of a fixed rotation. Ties broken
+-- by round-robin position (next_backend) so a dead-even cluster still
+-- spreads connections instead of always preferring backend 1.
 local function connect_backend()
-  for _ = 1, #backends do
-    next_backend = (next_backend % #backends) + 1
-    local b = backends[next_backend]
+  local order = {}
+  for i = 1, #backends do order[i] = i end
+  table.sort(order, function(a, b)
+    if active_connections[a] ~= active_connections[b] then
+      return active_connections[a] < active_connections[b]
+    end
+    return ((a - next_backend - 1) % #backends) < ((b - next_backend - 1) % #backends)
+  end)
+  for _, idx in ipairs(order) do
+    local b = backends[idx]
     local upstream = socket.tcp()
     local ok = copas.connect(upstream, b.host, b.port)
-    if ok then return upstream, b end
+    if ok then
+      next_backend = idx
+      active_connections[idx] = active_connections[idx] + 1
+      return upstream, b, idx
+    end
     pcall(function() upstream:close() end)
   end
   return nil
@@ -100,7 +124,7 @@ local function pump(from_sock, to_sock)
 end
 
 local function handle_connection(client)
-  local upstream = connect_backend()
+  local upstream, _backend, idx = connect_backend()
   if not upstream then
     pcall(function() client:close() end)
     return
@@ -108,8 +132,17 @@ local function handle_connection(client)
   -- Both directions need to pump concurrently -- one coroutine can't block
   -- on "read from client" and "read from upstream" at the same time, so the
   -- reverse direction runs as its own copas thread while this one handles
-  -- client -> upstream.
-  copas.addthread(pump, upstream, client)
+  -- client -> upstream. The upstream->client pump thread is the one that
+  -- outlives this function (client->upstream returns as soon as the
+  -- client's side closes, which happens first for this backend's own
+  -- httpd.lua -- see proxy.lua's header comment on Connection: close), so
+  -- the active-connection decrement has to live inside IT, not here, or
+  -- every connection would look "done" to the load balancer well before its
+  -- response has actually finished streaming back.
+  copas.addthread(function()
+    pump(upstream, client)
+    active_connections[idx] = active_connections[idx] - 1
+  end)
   pump(client, upstream)
 end
 

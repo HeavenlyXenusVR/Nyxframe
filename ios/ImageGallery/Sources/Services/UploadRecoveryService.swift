@@ -33,6 +33,11 @@ final class UploadRecoveryService: ObservableObject {
                 case "done":
                     PendingUploadJobStore.remove(jobId: job.jobId)
                     recoveredMessage = "\"\(job.filename)\" finished uploading."
+                case "error" where status.retrying == true:
+                    // Server is auto-retrying this same job -- leave it
+                    // queued for the next check rather than reporting a
+                    // failure that might be reversed moments later.
+                    break
                 case "error":
                     PendingUploadJobStore.remove(jobId: job.jobId)
                     recoveredMessage = "Upload of \"\(job.filename)\" failed: \(status.detail ?? "unknown error")"

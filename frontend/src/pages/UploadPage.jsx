@@ -189,6 +189,7 @@ export function UploadPage({ ctx }) {
   // all getting the one typed-in title would be wrong, not a convenience).
   const [extraFiles, setExtraFiles] = useState([]); // [{ id, file, status: pending|uploading|done|error, error }]
   const extraFileIdRef = useRef(0);
+  const prefillRef = useRef(null); // uncontrolled -- "Prefill from post" input, read on click only
 
   useEffect(() => {
     setMediaInfo(null);
@@ -288,6 +289,26 @@ export function UploadPage({ ctx }) {
 
   function update(key, value) {
     setForm((current) => ({ ...current, [key]: value }));
+  }
+
+  // "Prefill from post" -- lets an uploader reuse tags from one of their
+  // existing posts instead of retyping them. Accepts either a bare post id
+  // or a pasted post URL (…/media/123); GET /api/media/:id is already the
+  // same endpoint MediaDetailPage uses and returns the full media object,
+  // tags included, for anything the viewer is allowed to see.
+  async function prefillTagsFromPost() {
+    const idMatch = prefillRef.current?.value.match(/(\d+)\s*$/);
+    const mediaId = idMatch && idMatch[1];
+    if (!mediaId) return ctx.showToast("Enter a post id or paste a post URL.", "error");
+    try {
+      const data = await apiFetch(`/api/media/${mediaId}`);
+      const tags = Array.isArray(data.tags) ? data.tags : [];
+      if (!tags.length) return ctx.showToast(`"${data.title || `Post #${mediaId}`}" has no tags to copy.`, "info");
+      update("tags", tags.join(", "));
+      ctx.showToast(`Copied ${tags.length} tag${tags.length === 1 ? "" : "s"} from "${data.title || `Post #${mediaId}`}".`, "success");
+    } catch (error) {
+      ctx.showToast(error.message || "Could not load that post.", "error");
+    }
   }
 
   function updateSubcategory(index, value) {
@@ -737,6 +758,15 @@ export function UploadPage({ ctx }) {
               <small className="field-hint">Separate tags with commas.</small>
             </label>
             {tagList.length ? <ChipRow values={tagList.map((tag) => `#${tag}`)} /> : null}
+            <div className="field upload-prefill-tags">
+              <span className="field-head">Reuse tags from another post</span>
+              <div className="upload-prefill-tags-row">
+                <input ref={prefillRef} type="text" placeholder="Post id or URL" aria-label="Post id or URL to copy tags from" />
+                <button type="button" onClick={prefillTagsFromPost}>
+                  <Clipboard size={15} />Prefill from post
+                </button>
+              </div>
+            </div>
           </section>
 
           <section className="upload-section">

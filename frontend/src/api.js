@@ -444,6 +444,20 @@ async function fetchWithRemoteRetry(path, options, headers) {
   options = { ...options, __path: path };
   try {
     const response = await fetchWithTimeout(target, { ...options, headers }, options.timeoutMs || API_FETCH_TIMEOUT_MS);
+    // 503 + Retry-After is this backend's "didn't do anything, nothing to
+    // undo, try again shortly" signal (e.g. upload_chunk_finish's
+    // per-worker concurrency guardrail in routes.lua) -- unlike a bare
+    // network timeout, a 503 means the server definitely answered without
+    // starting the work, so retrying is safe for any method, not just
+    // idempotent ones. Bounded to the server's own Retry-After value
+    // (capped so a misbehaving/huge value can't stall the page).
+    if (response.status === 503) {
+      const retryAfterMs = Math.min(15_000, Math.max(0, (Number(response.headers.get("Retry-After")) || 0) * 1000));
+      if (retryAfterMs > 0) {
+        await new Promise((resolve) => window.setTimeout(resolve, retryAfterMs));
+        return fetchWithTimeout(target, { ...options, headers }, options.timeoutMs || API_FETCH_TIMEOUT_MS);
+      }
+    }
     if (shouldRefreshRemoteAfterStatus(response.status, options)) {
       const retryTarget = await retryTargetFor(path, target, options);
       if (retryTarget && retryTarget !== target) {
@@ -455,6 +469,26 @@ async function fetchWithRemoteRetry(path, options, headers) {
     // The page cancelled this request itself (navigated away, typed a new
     // query) -- not a network failure, so no offline marking and no retry.
     if (callerAborted(options)) throw error;
+    // Plain request timeout against the CURRENT (presumably still-correct)
+    // origin -- distinct from the tunnel-rotation case retryTargetFor exists
+    // for below, which only helps when a DIFFERENT origin is the fix.
+    // iOS/tvOS already retry their own request timeouts (GalleryAPIClient.
+    // sendWithRetry); this brings web to the same behavior instead of
+    // surfacing a transient timeout as a hard failure on the first miss.
+    // Same-target only, and only for idempotent/side-effect-safe requests
+    // (mirrors canRetryWithFreshRemote's own method gating below) so a
+    // retried POST can't ever double-submit.
+    if (isTimeoutError(error, options) && isSafeToRetrySameTarget(options)) {
+      for (const delayMs of [500, 1500]) {
+        await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+        try {
+          return await fetchWithTimeout(target, { ...options, headers }, options.timeoutMs || API_FETCH_TIMEOUT_MS);
+        } catch (retryError) {
+          if (!isTimeoutError(retryError, options)) { error = retryError; break; }
+          error = retryError;
+        }
+      }
+    }
     // Network-level error — mark the backend as offline so the adaptive poller
     // switches to fast mode (5 s), then re-fetch live-config.json to pick up a
     // rotated Cloudflare tunnel URL and retry up to twice with increasing delay.
@@ -683,6 +717,20 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = API_FETCH_TIMEOUT
 
 function callerAborted(options) {
   return Boolean(options?.signal?.aborted);
+}
+
+// fetchWithTimeout's internal AbortController fires with no `reason` on a
+// plain timeout, so "AbortError + the caller's own signal isn't what fired
+// it" is what actually distinguishes a timeout from the page cancelling the
+// request itself (callerAborted already covers the latter).
+function isTimeoutError(error, options) {
+  return error?.name === "AbortError" && !callerAborted(options);
+}
+
+function isSafeToRetrySameTarget(options) {
+  const method = String(options.method || "GET").toUpperCase();
+  if (method === "GET" || method === "HEAD") return true;
+  return isSafeRemoteRetryPost(String(options.__path || ""));
 }
 
 function originFromUrl(url) {

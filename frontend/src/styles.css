@@ -1753,7 +1753,14 @@ textarea:focus {
 
 .media-stage {
   position: relative;
-  min-height: 520px;
+  /* Fluid floor instead of a fixed 520px: scales down with .detail-main's
+     actual container width (cqw, see its own comment above) so a narrow
+     or unusually-shaped container (a VR browser's stretched/panned pane, a
+     portrait-rotated monitor) never forces a stage taller than the space
+     actually available. Clamped between a usable minimum and the old
+     520px ceiling, not unbounded, so a very wide container doesn't grow
+     the stage needlessly tall either. */
+  min-height: clamp(240px, 54cqw, 520px);
   display: grid;
   /* Explicit minmax(0, ...) column, not the implicit default `auto` --
      an `auto` grid track's minimum size is its content's max-content
@@ -1801,6 +1808,14 @@ textarea:focus {
 .media-stage video {
   width: 100%;
   max-height: 78vh;
+  /* dvh (dynamic viewport height) accounts for browser chrome that shows/
+     hides as the page scrolls and, more importantly here, tends to track
+     what's ACTUALLY visible more reliably than plain vh in embedded/XR
+     browser contexts (VR headset browsers, unusually scaled displays)
+     where the classic viewport box can be stretched or only partially
+     on-screen. Second declaration, not a replacement: browsers without
+     dvh support simply ignore this line and keep the vh value above. */
+  max-height: 78dvh;
   object-fit: contain;
 }
 
@@ -8052,6 +8067,20 @@ select option {
   justify-self: start;
 }
 
+.upload-prefill-tags-row {
+  display: flex;
+  gap: 8px;
+}
+
+.upload-prefill-tags-row input {
+  flex: 1;
+  min-width: 0;
+}
+
+.upload-prefill-tags-row button {
+  flex-shrink: 0;
+}
+
 .upload-duplicate-warning p {
   margin: 0;
   color: var(--text);
@@ -8406,6 +8435,15 @@ select option {
   grid-template-columns: minmax(0, 1fr);
   gap: 18px;
   min-width: 0;
+  /* inline-size containment (width-only -- doesn't need a definite height,
+     unlike `container-type: size`) lets .media-stage below size itself off
+     THIS element's actual rendered width via `cqw` instead of the window's
+     reported viewport width. Matters specifically for VR headset browsers
+     and unusually scaled/rotated monitor setups, where the viewport a page
+     is handed can be stretched, panned, or otherwise not map 1:1 to what's
+     visually legible -- a container query sees the real layout box
+     regardless, since it's measuring this element, not the window. */
+  container-type: inline-size;
 }
 
 .side-disclosure {

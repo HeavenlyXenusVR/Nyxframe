@@ -2108,6 +2108,7 @@ local function fetch_media_by_id(media_id, viewer0)
            m.views, m.downloads, m.created_at, m.updated_at, m.visibility,
            m.comments_enabled, m.downloads_enabled, m.pinned_at, m.is_adult,
            m.adult_marked_by_user, m.adult_marked_by_ai, m.moderation_status, m.dominant_color, m.source_url,
+           m.youtube_video_id,
            m.deleted_at, m.publish_at,
            c.name AS category_name, c.slug AS category_slug,
            sc.name AS subcategory_name, sc.slug AS subcategory_slug,
@@ -3775,6 +3776,12 @@ local function finalize_upload(req, user, source, original_filename, form)
   local description_raw = trim(nn(form.description) or "")
   local source_url, source_url_err = M.normalize_source_url(form.source_url)
   if source_url_err then return 400, { detail = source_url_err } end
+  -- YouTube source-link thumbnail override: detected here (cheap string
+  -- matching, no network call) so it can ride along in the same INSERT as
+  -- everything else; the actual fetch+render happens lazily in
+  -- M.serve_media_thumb the first time this media's thumbnail is requested,
+  -- same as every other thumbnail source already works.
+  local youtube_video_id = source_url and require("youtube_thumb").extract_video_id(source_url) or nil
   local tags_hint = parse_tags(form.tags)
   local visibility = (nn(form.visibility) or "public"):lower()
   if visibility ~= "public" and visibility ~= "unlisted" and visibility ~= "private" then
@@ -3931,8 +3938,9 @@ local function finalize_upload(req, user, source, original_filename, form)
         (user_id, category_id, subcategory_id, title, description, tags, media_kind, mime_type, original_filename,
          storage_path, file_size, media_file_id, content_sha256, visibility, comments_enabled, downloads_enabled,
          is_adult, adult_marked_by_user, adult_marked_by_ai, moderation_status, moderation_score, moderation_reason, moderated_at,
-         image_phash, image_dhash, image_width, image_height, dominant_color, publish_at, source_url, expires_at)
-      VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now(),%s,%s,%s,%s,%s,%s,%s,%s)
+         image_phash, image_dhash, image_width, image_height, dominant_color, publish_at, source_url, expires_at,
+         youtube_video_id)
+      VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,now(),%s,%s,%s,%s,%s,%s,%s,%s,%s)
       RETURNING id
     ]],
     tostring(user.id), tostring(category_id), subcategory_id and tostring(subcategory_id) or nil,
@@ -3944,7 +3952,8 @@ local function finalize_upload(req, user, source, original_filename, form)
     fingerprint and fingerprint.image_phash or nil, fingerprint and fingerprint.image_dhash or nil,
     fingerprint and fingerprint.image_width and tostring(fingerprint.image_width) or nil,
     fingerprint and fingerprint.image_height and tostring(fingerprint.image_height) or nil,
-    fingerprint and fingerprint.dominant_color or nil, publish_at, source_url, expires_at
+    fingerprint and fingerprint.dominant_color or nil, publish_at, source_url, expires_at,
+    youtube_video_id
   )
   finalize_upload_debug_mark("media_items insert done", debug_t0)
   if not row then return 500, { detail = "Could not save media: " .. tostring(insert_err) } end
@@ -4045,6 +4054,19 @@ end
 
 local UPLOAD_CHUNK_SESSION_TTL_SECONDS = 2 * 3600
 local upload_chunk_storage = {}
+
+-- Guardrail, 2026-10-22: caps how many finalize_upload background jobs
+-- THIS worker process will run at once. In-memory, not file-based like
+-- upload_chunk_storage's other state -- this is specifically about one
+-- worker's own concurrent load, which the others behind nyxframe-proxy
+-- don't share (proxy.lua's least-connections routing already steers new
+-- connections away from a busy worker; this is the backstop for a burst
+-- that still lands more uploads on one worker than it should take at once).
+-- "Degrades gracefully, don't queue" -- same philosophy acquire_transcode_slot
+-- already uses -- so a caller over the cap gets 503 + Retry-After instead
+-- of piling up behind the ones already running.
+upload_chunk_storage.active_finalize_jobs = 0
+upload_chunk_storage.FINALIZE_MAX_CONCURRENT = 3
 
 function upload_chunk_storage.session_path(session_id)
   return M.settings.uploads_dir .. "/_upload_sessions_" .. tostring(session_id) .. ".json"
@@ -4348,6 +4370,12 @@ function M.upload_chunk_finish(req)
     return 400, { detail = "Category is required." }
   end
 
+  if upload_chunk_storage.active_finalize_jobs >= upload_chunk_storage.FINALIZE_MAX_CONCURRENT then
+    pcall(os.remove, temp_path)
+    return 503, { detail = "This server is busy processing other uploads right now -- please try again in a few seconds." }, { ["Retry-After"] = "5" }
+  end
+  upload_chunk_storage.active_finalize_jobs = upload_chunk_storage.active_finalize_jobs + 1
+
   local job_id = sodium.sodium_bin2hex(sodium.randombytes_buf(16))
   upload_chunk_storage.job_write(job_id, { user_id = user.id, status = "processing", created_at = os.time() })
 
@@ -4362,33 +4390,78 @@ function M.upload_chunk_finish(req)
   -- pass. `req` is safe to close over here -- it's a plain table (method/
   -- path/query/headers/etc), not the live socket, so referencing it after
   -- this handler's own response has already gone out is fine.
+  --
+  -- Auto-retries a failed attempt up to UPLOAD_RETRY_MAX_ATTEMPTS times
+  -- total before giving up, entirely within this one coroutine: attempt
+  -- N+1 only ever starts after attempt N's pcall has fully returned and its
+  -- failure is already durably written to the job file, so there is no
+  -- window where two attempts for the same job could both be in flight (the
+  -- scenario that would risk a duplicate media_items row). Only retries
+  -- failures that look transient -- an unexpected Lua error, or a 5xx from
+  -- finalize_upload itself -- never a 4xx (bad title, unsupported file
+  -- type, ...), since that's a deterministic rejection a byte-for-byte
+  -- identical retry would just reproduce 3 times for nothing. Also stops
+  -- immediately if temp_path no longer exists: finalize_upload's own
+  -- media_files.save_media_file_to_disk os.rename()s it into permanent
+  -- storage BEFORE the DB insert that can actually fail, so a missing
+  -- temp_path means a retry can't safely replay from scratch anyway (it
+  -- would misread as "unsupported file bytes" instead of the real error) --
+  -- and, since that rename only happens once real progress has been made,
+  -- it's also the signal that this attempt got far enough that blindly
+  -- re-running it would risk exactly the duplicate insert this exists to
+  -- prevent.
   copas.addthread(function()
-    local telemetry_t0 = M.telemetry.now()
-    local ok, status_code, resp_body = pcall(
-      finalize_upload, req, user, { file_path = temp_path, file_size = total_size }, session.filename, pseudo_form
-    )
-    pcall(os.remove, temp_path)
-    local telemetry_duration_ms = M.telemetry.ms_since(telemetry_t0)
-    if not ok then
-      print("[nyxframe] background upload finish error (job " .. job_id .. "): " .. tostring(status_code))
-      M.telemetry.record("upload", "chunked", "error", telemetry_duration_ms, { bytes = total_size, detail = tostring(status_code):sub(1, 300) })
-      upload_chunk_storage.job_write(job_id, {
-        user_id = user.id, status = "error", created_at = os.time(),
-        detail = "Upload processing failed unexpectedly.",
-      })
-      return
-    end
-    if status_code == 200 then
-      M.telemetry.record("upload", "chunked", "success", telemetry_duration_ms,
-        { bytes = total_size, media_id = resp_body and resp_body.media and resp_body.media.id or nil })
-      upload_chunk_storage.job_write(job_id, { user_id = user.id, status = "done", created_at = os.time(), response = resp_body })
-    else
+    local UPLOAD_RETRY_MAX_ATTEMPTS = 3
+    local UPLOAD_RETRY_BACKOFF_SECONDS = { 3, 10 }
+    local attempt = 1
+    while true do
+      local telemetry_t0 = M.telemetry.now()
+      local ok, status_code, resp_body = pcall(
+        finalize_upload, req, user, { file_path = temp_path, file_size = total_size }, session.filename, pseudo_form
+      )
+      local telemetry_duration_ms = M.telemetry.ms_since(telemetry_t0)
+
+      if ok and status_code == 200 then
+        M.telemetry.record("upload", "chunked", "success", telemetry_duration_ms,
+          { bytes = total_size, media_id = resp_body and resp_body.media and resp_body.media.id or nil, attempts = attempt })
+        upload_chunk_storage.job_write(job_id, { user_id = user.id, status = "done", created_at = os.time(), response = resp_body, attempts = attempt })
+        pcall(os.remove, temp_path)
+        upload_chunk_storage.active_finalize_jobs = upload_chunk_storage.active_finalize_jobs - 1
+        return
+      end
+
+      local detail = ok and ((resp_body and resp_body.detail) or "Upload failed.") or tostring(status_code)
+      if not ok then
+        print("[nyxframe] background upload finish error (job " .. job_id .. ", attempt " .. attempt .. "): " .. detail)
+      end
       M.telemetry.record("upload", "chunked", "error", telemetry_duration_ms,
-        { bytes = total_size, status = status_code, detail = (resp_body and resp_body.detail) or "Upload failed." })
+        { bytes = total_size, status = ok and status_code or nil, detail = detail:sub(1, 300), attempt = attempt })
+
+      local retryable = (not ok) or (type(status_code) == "number" and status_code >= 500)
+      local source_still_present = io.open(temp_path, "rb")
+      if source_still_present then source_still_present:close() end
+
+      if not retryable or not source_still_present or attempt >= UPLOAD_RETRY_MAX_ATTEMPTS then
+        upload_chunk_storage.job_write(job_id, {
+          user_id = user.id, status = "error", created_at = os.time(),
+          detail = ok and detail or "Upload processing failed unexpectedly.",
+          attempts = attempt,
+        })
+        pcall(os.remove, temp_path)
+        upload_chunk_storage.active_finalize_jobs = upload_chunk_storage.active_finalize_jobs - 1
+        return
+      end
+
+      -- Durably mark this attempt as failed (retrying=true) before sleeping
+      -- -- a poll landing in this window sees a finished failure, never a
+      -- stale "processing" that would otherwise look stuck. copas.sleep
+      -- yields this worker to other requests for the backoff duration.
       upload_chunk_storage.job_write(job_id, {
         user_id = user.id, status = "error", created_at = os.time(),
-        detail = (resp_body and resp_body.detail) or "Upload failed.",
+        detail = detail, attempts = attempt, retrying = true,
       })
+      copas.sleep(UPLOAD_RETRY_BACKOFF_SECONDS[attempt] or UPLOAD_RETRY_BACKOFF_SECONDS[#UPLOAD_RETRY_BACKOFF_SECONDS])
+      attempt = attempt + 1
     end
   end)
 
@@ -4440,7 +4513,11 @@ function M.upload_job_status(req)
     end
     return 200, { status = "done", media = media, possible_duplicates = arr(r.possible_duplicates), possible_site_duplicates = arr(r.possible_site_duplicates) }
   elseif job.status == "error" then
-    return 200, { status = "error", detail = job.detail or "Upload failed." }
+    -- retrying=true means this is an in-flight attempt's failure, not the
+    -- final outcome -- upload_chunk_finish's background thread is about to
+    -- try again (see its own header comment). Surfaced to the client so a
+    -- poll landing in that window doesn't treat it as terminal.
+    return 200, { status = "error", detail = job.detail or "Upload failed.", retrying = job.retrying or false, attempts = job.attempts }
   end
   return 200, { status = "processing" }
 end
@@ -8808,6 +8885,44 @@ function M.serve_media_thumb(req)
     local bytes = M._read_file_chunked(cf)
     cf:close()
     return 200, bytes, { ["Content-Type"] = "image/webp", ["Cache-Control"] = "public, max-age=604800, immutable" }
+  end
+
+  -- YouTube source-link override takes precedence over BOTH the video and
+  -- image default-render paths below -- an uploader who linked a YouTube
+  -- video wants THAT video's thumbnail, not a frame grabbed from their own
+  -- re-upload or the raw image bytes. Backgrounded same as the video branch
+  -- below rather than fetched inline: an outbound GET to img.youtube.com
+  -- has far less predictable latency than a local ffmpeg call, so blocking
+  -- this worker's event loop on it would be worse, not better. Shares
+  -- claim_thumb_job's marker and acquire_transcode_slot's cap with every
+  -- other backgrounded thumbnail job for the same reason those already do:
+  -- one proven concurrency ceiling, not a new one per feature.
+  if item.youtube_video_id and item.youtube_video_id ~= cjson.null and nn(item.youtube_video_id) then
+    local marker = cache_path .. ".pending"
+    local cache_dir = cache_path:match("^(.*)/[^/]+$")
+    os.execute("mkdir -p " .. shell_quote(cache_dir))
+    local copas = require("copas")
+    copas.addthread(function()
+      if not claim_thumb_job(marker) then return end
+      local slot_path = acquire_transcode_slot()
+      if not slot_path then
+        os.remove(marker)
+        return
+      end
+      local youtube_thumb = require("youtube_thumb")
+      local ok, bytes = pcall(youtube_thumb.fetch_best_thumbnail_bytes, item.youtube_video_id)
+      local rendered = ok and bytes and media_files.render_webp_from_bytes(bytes, width, 84, nil)
+      if rendered then
+        local out = io.open(cache_path, "wb")
+        if out then out:write(rendered); out:close() end
+      else
+        print("[nyxframe] youtube thumbnail override failed (media " .. tostring(media_id) .. "): " .. tostring(bytes))
+      end
+      os.remove(marker)
+      os.execute("rm -f " .. shell_quote(slot_path))
+    end)
+    local svg = media_files.video_placeholder_svg(width)
+    return 200, svg, { ["Content-Type"] = "image/svg+xml", ["Cache-Control"] = "public, max-age=20" }
   end
 
   if media_kind == "video" then

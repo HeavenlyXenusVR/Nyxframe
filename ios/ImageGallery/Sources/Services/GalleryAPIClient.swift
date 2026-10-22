@@ -135,7 +135,24 @@ final class GalleryAPIClient {
         var attempt = 0
         while true {
             do {
-                return try await perform(try buildRequest())
+                let result = try await perform(try buildRequest())
+                // 503 + Retry-After is this backend's "didn't do anything,
+                // nothing to undo, try again shortly" signal (e.g.
+                // upload_chunk_finish's per-worker concurrency guardrail in
+                // routes.lua) -- safe to retry regardless of method, unlike
+                // a transient network error, since the server definitely
+                // answered without starting the work. Checked dynamically
+                // since `perform` is generic over T, but every real call
+                // site here returns (Data, URLResponse).
+                if let (_, response) = result as? (Data, URLResponse),
+                   let http = response as? HTTPURLResponse, http.statusCode == 503,
+                   let retryAfter = http.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init),
+                   attempt < 2 {
+                    attempt += 1
+                    try? await Task.sleep(nanoseconds: UInt64(min(15, max(0, retryAfter)) * 1_000_000_000))
+                    continue
+                }
+                return result
             } catch {
                 guard Self.isTransientNetworkError(error), attempt < 2 else { throw error }
                 attempt += 1

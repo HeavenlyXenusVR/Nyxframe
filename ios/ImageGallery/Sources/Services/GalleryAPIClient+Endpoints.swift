@@ -372,6 +372,11 @@ extension GalleryAPIClient {
         var possibleDuplicates: [DuplicateMatch]?
         var possibleSiteDuplicates: [DuplicateMatch]?
         var detail: String?
+        /// true while status == "error" but the server is about to
+        /// auto-retry this same job (up to 3 attempts total, see
+        /// upload_chunk_finish in routes.lua) -- not a final outcome yet.
+        var retrying: Bool?
+        var attempts: Int?
     }
 
     /// One-shot check of `GET /api/media/upload/job/:job_id`
