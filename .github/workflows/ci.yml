@@ -58,7 +58,13 @@ jobs:
     # studio, upload, settings, and the phone layout's bottom bar + "More"
     # sheet. No backend or database needed -- every /api call is answered
     # by the test itself.
-    runs-on: ubuntu-latest
+    #
+    # Pinned (not ubuntu-latest): GitHub moved that floating tag to
+    # ubuntu-26.04, which Playwright 1.60.0 doesn't recognize at all
+    # ("ERROR: Playwright does not support chromium on ubuntu26.04-x64") --
+    # broke this job on every run since, unrelated to any app change.
+    # ubuntu-24.04 is Playwright's current supported LTS.
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
